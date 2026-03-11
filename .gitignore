@@ -1,0 +1,18 @@
+﻿# 编译产物
+dist/
+*.exe
+*.obj
+*.o
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.sln
+*.vcxproj
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.log
