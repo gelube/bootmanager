@@ -424,11 +424,57 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     return TRUE;
 }
 
+// 通过 ID 查找条目对应的 GUID
+static BOOL FindEntryGuidById(UEFI_BOOT_LIST* list, DWORD id, WCHAR* guid, DWORD guidSize) {
+    if (!list || !guid || guidSize < 64) return FALSE;
+    
+    UEFI_BOOT_ENTRY* entry = list->entries;
+    while (entry) {
+        if (entry->id == id) {
+            // 从 devicePath 或 filePath 提取 GUID
+            // 格式通常是 {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
+            const WCHAR* start = wcsstr(entry->devicePath, L"{");
+            if (!start) start = wcsstr(entry->filePath, L"{");
+            if (start) {
+                const WCHAR* end = wcsstr(start, L"}");
+                if (end) {
+                    size_t len = end - start + 1;
+                    if (len < guidSize) {
+                        wcsncpy(guid, start, len);
+                        guid[len] = L'\0';
+                        return TRUE;
+                    }
+                }
+            }
+        }
+        entry = entry->next;
+    }
+    return FALSE;
+}
+
 // 删除启动项
 BOOL UefiDeleteBootEntry(DWORD id) {
-    // 需要先通过 ID 找到 GUID
-    (void)id;
-    return FALSE;
+    if (id == 0) return FALSE;
+    
+    // 扫描当前启动项列表以获取 GUID
+    UEFI_BOOT_LIST* list = UefiScanBootEntries();
+    if (!list) return FALSE;
+    
+    WCHAR guid[64] = {0};
+    BOOL found = FindEntryGuidById(list, id, guid, 64);
+    UefiFreeBootList(list);
+    
+    if (!found) {
+        // 如果找不到 GUID，尝试直接使用 ID 构造 bootXXXX 格式
+        swprintf(guid, 64, L"{boot%04X}", id);
+    }
+    
+    // 执行 bcdedit /delete {guid}
+    WCHAR cmd[512];
+    swprintf(cmd, 512, L"bcdedit /delete %s", guid);
+    
+    CHAR output[4096] = {0};
+    return ExecuteCommand(cmd, output, sizeof(output));
 }
 
 // 上移启动项
@@ -447,9 +493,34 @@ BOOL UefiMoveBootEntryDown(UEFI_BOOT_LIST* list, DWORD id) {
 
 // 设为默认启动项
 BOOL UefiSetDefaultBootEntry(UEFI_BOOT_LIST* list, DWORD id) {
-    (void)list;
-    (void)id;
-    return FALSE;
+    if (id == 0) return FALSE;
+    
+    WCHAR guid[64] = {0};
+    
+    // 如果提供了列表，从列表中查找 GUID
+    if (list) {
+        if (!FindEntryGuidById(list, id, guid, 64)) {
+            // 找不到 GUID，使用 bootXXXX 格式
+            swprintf(guid, 64, L"{boot%04X}", id);
+        }
+    } else {
+        // 没有列表，扫描获取
+        UEFI_BOOT_LIST* scanList = UefiScanBootEntries();
+        if (scanList) {
+            FindEntryGuidById(scanList, id, guid, 64);
+            UefiFreeBootList(scanList);
+        }
+        if (wcslen(guid) == 0) {
+            swprintf(guid, 64, L"{boot%04X}", id);
+        }
+    }
+    
+    // 执行 bcdedit /default {guid}
+    WCHAR cmd[512];
+    swprintf(cmd, 512, L"bcdedit /default %s", guid);
+    
+    CHAR output[4096] = {0};
+    return ExecuteCommand(cmd, output, sizeof(output));
 }
 
 // 导出 NVRAM

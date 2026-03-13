@@ -14,6 +14,7 @@
 #include "../core/uefi.h"
 #include "../core/refind.h"
 #include "../core/backup.h"
+#include "../core/wimboot.h"
 
 // ============================================
 // 亮色主题 - 设计令牌
@@ -429,6 +430,171 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 }
             }
             break;
+        
+        // UEFI 启动项管理
+        case ID_BTN_DELETE_ENTRY: {
+            if (!g_hListView) break;
+            int sel = ListView_GetNextItem(g_hListView, -1, LVNI_SELECTED);
+            if (sel == -1) {
+                MessageBoxW(hWnd, L"请先选择一个启动项", L"提示", MB_OK | MB_ICONINFORMATION);
+                break;
+            }
+            
+            WCHAR idText[16] = {0};
+            ListView_GetItemText(g_hListView, sel, 0, idText, 16);
+            DWORD id = wcstoul(idText, NULL, 16);
+            
+            WCHAR name[256] = {0};
+            ListView_GetItemText(g_hListView, sel, 1, name, 256);
+            
+            WCHAR msg[512];
+            swprintf(msg, 512, L"确定删除启动项？\n\n名称：%s\nID: %04X", name, id);
+            
+            if (MessageBoxW(hWnd, msg, L"确认删除", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                SetStatus(L"⏳ 正在删除...");
+                if (UefiDeleteBootEntry(id)) {
+                    MessageBoxW(hWnd, L"启动项已删除", L"完成", MB_OK | MB_ICONINFORMATION);
+                    SetStatus(L"✓ 已删除");
+                    RefreshBootList();
+                } else {
+                    MessageBoxW(hWnd, L"删除失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                    SetStatus(L"✗ 删除失败");
+                }
+            }
+            break;
+        }
+        
+        case ID_BTN_SET_DEFAULT: {
+            if (!g_hListView) break;
+            int sel = ListView_GetNextItem(g_hListView, -1, LVNI_SELECTED);
+            if (sel == -1) {
+                MessageBoxW(hWnd, L"请先选择一个启动项", L"提示", MB_OK | MB_ICONINFORMATION);
+                break;
+            }
+            
+            WCHAR idText[16] = {0};
+            ListView_GetItemText(g_hListView, sel, 0, idText, 16);
+            DWORD id = wcstoul(idText, NULL, 16);
+            
+            WCHAR name[256] = {0};
+            ListView_GetItemText(g_hListView, sel, 1, name, 256);
+            
+            SetStatus(L"⏳ 正在设置默认...");
+            if (UefiSetDefaultBootEntry(g_bootList, id)) {
+                WCHAR msg[256];
+                swprintf(msg, 256, L"已设置默认启动项:\n%s", name);
+                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
+                SetStatus(L"✓ 已设为默认");
+            } else {
+                MessageBoxW(hWnd, L"设置失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 设置失败");
+            }
+            break;
+        }
+        
+        // WIM/VHD 启动
+        case ID_BTN_ADD_WIM: {
+            WCHAR wimPath[MAX_PATH] = {0};
+            if (!WimSelectFileDialog(hWnd, wimPath, MAX_PATH)) break;
+            
+            // 简单的输入框获取名称
+            WCHAR name[256] = {0};
+            WCHAR inputTitle[] = L"输入启动项名称";
+            WCHAR defaultName[MAX_PATH];
+            
+            // 从路径提取文件名作为默认名称
+            const WCHAR* lastNameSep = wcsrchr(wimPath, L'\\');
+            if (lastNameSep) {
+                wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
+                WCHAR* dot = wcschr(defaultName, L'.');
+                if (dot) *dot = L'\0';
+            } else {
+                wcsncpy(defaultName, L"Windows PE", MAX_PATH);
+            }
+            
+            // 使用简单的对话框获取名称
+            if (MessageBoxW(hWnd, L"将使用文件名作为启动项名称\n\n点击确定继续，取消使用默认名称", L"提示", MB_OKCANCEL | MB_ICONINFORMATION) == IDCANCEL) {
+                wcsncpy(name, defaultName, 256);
+            } else {
+                wcsncpy(name, defaultName, 256);
+            }
+            
+            SetStatus(L"⏳ 正在添加 WIM 启动项...");
+            if (WimAddBootEntry(name, wimPath, L"1")) {
+                WCHAR msg[MAX_PATH + 64];
+                swprintf(msg, MAX_PATH + 64, L"WIM 启动项添加成功!\n\n名称：%s\n路径：%s", name, wimPath);
+                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
+                SetStatus(L"✓ WIM 启动项已添加");
+                RefreshBootList();
+            } else {
+                MessageBoxW(hWnd, L"WIM 启动项添加失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 添加失败");
+            }
+            break;
+        }
+        
+        case ID_BTN_ADD_VHD: {
+            WCHAR vhdPath[MAX_PATH] = {0};
+            if (!VhdSelectFileDialog(hWnd, vhdPath, MAX_PATH)) break;
+            
+            WCHAR name[256] = {0};
+            WCHAR defaultName[MAX_PATH];
+            
+            // 从路径提取文件名作为默认名称
+            const WCHAR* lastNameSep = wcsrchr(vhdPath, L'\\');
+            if (lastNameSep) {
+                wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
+                WCHAR* dot = wcschr(defaultName, L'.');
+                if (dot) *dot = L'\0';
+            } else {
+                wcsncpy(defaultName, L"VHD Windows", MAX_PATH);
+            }
+            
+            wcsncpy(name, defaultName, 256);
+            
+            SetStatus(L"⏳ 正在添加 VHD 启动项...");
+            if (VhdAddBootEntry(name, vhdPath)) {
+                WCHAR msg[MAX_PATH + 64];
+                swprintf(msg, MAX_PATH + 64, L"VHD 启动项添加成功!\n\n名称：%s\n路径：%s", name, vhdPath);
+                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
+                SetStatus(L"✓ VHD 启动项已添加");
+                RefreshBootList();
+            } else {
+                MessageBoxW(hWnd, L"VHD 启动项添加失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 添加失败");
+            }
+            break;
+        }
+        
+        case ID_BTN_MBR_FIX: {
+            if (MessageBoxW(hWnd, L"确定修复 MBR？\n\n此操作将重写主引导记录。", L"确认", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                SetStatus(L"⏳ 修复 MBR 中...");
+                // 使用 bootrec /fixmbr
+                SHELLEXECUTEINFOW sei = {0};
+                sei.cbSize = sizeof(sei);
+                sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+                sei.lpVerb = L"runas";
+                sei.lpFile = L"cmd.exe";
+                sei.lpParameters = L"/c bootrec /fixmbr";
+                sei.nShow = SW_HIDE;
+                
+                if (ShellExecuteExW(&sei)) {
+                    WaitForSingleObject(sei.hProcess, 30000);
+                    DWORD exitCode;
+                    GetExitCodeProcess(sei.hProcess, &exitCode);
+                    CloseHandle(sei.hProcess);
+                    
+                    if (exitCode == 0) {
+                        MessageBoxW(hWnd, L"MBR 修复完成", L"完成", MB_OK | MB_ICONINFORMATION);
+                        SetStatus(L"✓ MBR 已修复");
+                    } else {
+                        MessageBoxW(hWnd, L"MBR 修复失败", L"错误", MB_OK | MB_ICONERROR);
+                        SetStatus(L"✗ 修复失败");
+                    }
+                }
+            }
+            break;
+        }
         }
         return 0;
         
