@@ -227,13 +227,58 @@ static BOOL CheckEfiFolder(const WCHAR* rootPath)
 
 
 // ============================================
+// 获取卷所属磁盘编号
+// ============================================
+INT GetVolumeDiskNumber(const WCHAR* volumeName)
+{
+    if (!volumeName || volumeName[0] == L'\0') {
+        return -1;
+    }
+
+    HANDLE hVolume = CreateFileW(
+        volumeName,
+        0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_EXISTING,
+        0,
+        NULL
+    );
+
+    if (hVolume == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+
+    BYTE extentsBuffer[sizeof(VOLUME_DISK_EXTENTS) + sizeof(DISK_EXTENT) * 8] = {0};
+    PVOLUME_DISK_EXTENTS extents = (PVOLUME_DISK_EXTENTS)extentsBuffer;
+    DWORD bytesReturned = 0;
+
+    BOOL ok = DeviceIoControl(
+        hVolume,
+        IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+        NULL,
+        0,
+        extents,
+        (DWORD)sizeof(extentsBuffer),
+        &bytesReturned,
+        NULL
+    );
+
+    CloseHandle(hVolume);
+
+    if (!ok || extents->NumberOfDiskExtents == 0) {
+        return -1;
+    }
+
+    return (INT)extents->Extents[0].DiskNumber;
+}
+
+// ============================================
 // 枚举 ESP 分区
-// 通过 FAT/FAT32 + EFI 目录判定，不再依赖物理磁盘编号
+// 通过 FAT/FAT32 + EFI 目录判定，并匹配选中的磁盘
 // ============================================
 INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
 {
-    (void)diskNumber;
-
     INT count = 0;
     INT maxPartitions = 32;
     WCHAR volumeName[MAX_PATH];
@@ -253,6 +298,12 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
         WCHAR pathNames[MAX_PATH] = {0};
         DWORD pathNamesLen = 0;
         BOOL hasDriveLetter = GetVolumePathNamesForVolumeNameW(volumeName, pathNames, MAX_PATH, &pathNamesLen);
+
+        // 仅保留属于选中磁盘的卷
+        INT volDiskNum = GetVolumeDiskNumber(volumeName);
+        if (volDiskNum < 0 || volDiskNum != diskNumber) {
+            continue;
+        }
 
         // 获取文件系统
         WCHAR fsName[32] = {0};
@@ -414,8 +465,69 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
                 return 0;
             }
             break;
+
+        case IDC_BTN_BROWSE:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                OPENFILENAMEW ofn = {0};
+                WCHAR szFilter[] = L"EFI Files (*.efi)\0*.efi\0All Files (*.*)\0*.*\0";
+                WCHAR filePath[MAX_PATH] = {0};
+
+                ofn.lStructSize = sizeof(OPENFILENAMEW);
+                ofn.hwndOwner = hDlg;
+                ofn.lpstrFilter = szFilter;
+                ofn.nFilterIndex = 1;
+                ofn.lpstrFile = filePath;
+                ofn.nMaxFile = MAX_PATH;
+                ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+                ofn.lpstrDefExt = L"efi";
+                ofn.lpstrTitle = L"选择 EFI 启动文件";
+
+                if (GetOpenFileNameW(&ofn)) {
+                    SetDlgItemTextW(hDlg, IDC_EDIT_PATH, filePath);
+                }
+                return 0;
+            }
+            break;
+
+        case IDOK:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                GetDlgItemTextW(hDlg, IDC_EDIT_TITLE, data->menuTitle, 256);
+                GetDlgItemTextW(hDlg, IDC_EDIT_PATH, data->filePath, 512);
+
+                if (wcslen(data->menuTitle) == 0) {
+                    MessageBoxW(hDlg, L"请输入菜单标题", L"提示", MB_OK | MB_ICONWARNING);
+                    SetFocus(GetDlgItem(hDlg, IDC_EDIT_TITLE));
+                    return 0;
+                }
+
+                if (wcslen(data->filePath) == 0) {
+                    MessageBoxW(hDlg, L"请输入启动文件路径", L"提示", MB_OK | MB_ICONWARNING);
+                    SetFocus(GetDlgItem(hDlg, IDC_EDIT_PATH));
+                    return 0;
+                }
+
+                PostMessageW(hDlg, WM_APP + 1, IDOK, 0);
+                DestroyWindow(hDlg);
+                return 0;
+            }
+            break;
+
+        case IDCANCEL:
+            if (HIWORD(wParam) == BN_CLICKED) {
+                PostMessageW(hDlg, WM_APP + 1, IDCANCEL, 0);
+                DestroyWindow(hDlg);
+                return 0;
+            }
+            break;
         }
         break;
+
+    case WM_CLOSE:
+        if (data) {
+            PostMessageW(hDlg, WM_APP + 1, IDCANCEL, 0);
+        }
+        DestroyWindow(hDlg);
+        return 0;
     }
 
     return DefWindowProcW(hDlg, msg, wParam, lParam);
@@ -579,54 +691,8 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
 
-        if (msg.message == WM_COMMAND) {
-            if (LOWORD(msg.wParam) == IDOK) {
-                // 验证输入
-                GetDlgItemTextW(hDlg, IDC_EDIT_TITLE, data.menuTitle, 256);
-                GetDlgItemTextW(hDlg, IDC_EDIT_PATH, data.filePath, 512);
-
-                if (wcslen(data.menuTitle) == 0) {
-                    MessageBoxW(hDlg, L"请输入菜单标题", L"提示", MB_OK | MB_ICONWARNING);
-                    SetFocus(hEditTitle);
-                    continue;
-                }
-
-                if (wcslen(data.filePath) == 0) {
-                    MessageBoxW(hDlg, L"请输入启动文件路径", L"提示", MB_OK | MB_ICONWARNING);
-                    SetFocus(hEditPath);
-                    continue;
-                }
-
-                result = IDOK;
-                break;
-            } else if (LOWORD(msg.wParam) == IDCANCEL) {
-                result = IDCANCEL;
-                break;
-            } else if (LOWORD(msg.wParam) == IDC_BTN_BROWSE) {
-                // 浏览文件 - 修复文件对话框
-                OPENFILENAMEW ofn = {0};
-                WCHAR szFilter[] = L"EFI Files (*.efi)\0*.efi\0All Files (*.*)\0*.*\0";
-                WCHAR filePath[MAX_PATH] = {0};
-
-                ofn.lStructSize = sizeof(OPENFILENAMEW);
-                ofn.hwndOwner = hDlg;
-                ofn.lpstrFilter = szFilter;
-                ofn.nFilterIndex = 1;
-                ofn.lpstrFile = filePath;
-                ofn.nMaxFile = MAX_PATH;
-                ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
-                ofn.lpstrDefExt = L"efi";
-                ofn.lpstrTitle = L"选择 EFI 启动文件";
-
-                if (GetOpenFileNameW(&ofn)) {
-                    SetDlgItemTextW(hDlg, IDC_EDIT_PATH, filePath);
-                }
-            }
-        }
-
-        // 处理 WM_CLOSE
-        if (msg.message == WM_CLOSE) {
-            result = IDCANCEL;
+        if (msg.message == WM_APP + 1) {
+            result = (INT_PTR)msg.wParam;
             break;
         }
     }
