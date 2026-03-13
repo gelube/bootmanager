@@ -38,6 +38,8 @@ typedef struct {
 // 对话框数据
 typedef struct {
     HWND hDlg;              // 对话框窗口
+    HWND hComboDisk;        // 磁盘下拉框句柄
+    HWND hComboPart;        // 分区下拉框句柄
     WCHAR menuTitle[256];   // 菜单标题
     INT selectedDisk;       // 选中的磁盘索引
     INT selectedPartition;  // 选中的分区索引
@@ -55,7 +57,8 @@ BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath);
 
 // 辅助函数
 INT EnumPhysicalDisks(DISK_INFO** disks);
-INT EnumEspPartitions(PARTITION_INFO** partitions);
+INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions);
+INT GetVolumeDiskNumber(const WCHAR* volumeName);
 VOID FreeDiskList(DISK_INFO* disks, INT count);
 VOID FreePartitionList(PARTITION_INFO* partitions, INT count);
 

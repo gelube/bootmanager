@@ -5,7 +5,7 @@
  * 功能:
  * - 模态对话框，类似 BOOTICE 风格
  * - 自动枚举物理磁盘
- * - 自动搜索 ESP 分区
+ * - 根据选中的磁盘动态枚举 ESP 分区
  * - 文件浏览选择 EFI 文件
  * - 验证输入并创建启动项
  */
@@ -16,6 +16,8 @@
 #include <shlobj.h>
 #include <wchar.h>
 #include <stdio.h>
+#include <setupapi.h>
+#include <cfgmgr32.h>
 #include "dialog.h"
 
 // ============================================
@@ -197,51 +199,108 @@ static BOOL CheckEfiFolder(const WCHAR* rootPath)
 
 
 // ============================================
-// 枚举 ESP 分区（简化版）
-// 直接遍历 C: 到 Z: 盘符
+// 获取卷所属的物理磁盘编号
+// 使用 IOCTL_STORAGE_GET_DEVICE_NUMBER
+// 返回 -1 表示失败或无法关联到物理磁盘
 // ============================================
-INT EnumEspPartitions(PARTITION_INFO** partitions)
+INT GetVolumeDiskNumber(const WCHAR* volumeName)
+{
+    HANDLE hVolume = INVALID_HANDLE_VALUE;
+    STORAGE_DEVICE_NUMBER storageNum = {0};
+    DWORD bytesReturned = 0;
+    
+    // 打开卷句柄 (例如: \\\\.\\C: 或 \\\\.\\Volume{...})
+    hVolume = CreateFileW(volumeName, 0, 
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, 
+        OPEN_EXISTING, 0, NULL);
+    
+    if (hVolume == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    
+    // 获取设备编号
+    if (DeviceIoControl(hVolume, IOCTL_STORAGE_GET_DEVICE_NUMBER,
+        NULL, 0, &storageNum, sizeof(storageNum), &bytesReturned, NULL)) {
+        
+        CloseHandle(hVolume);
+        return (INT)storageNum.DeviceNumber;
+    }
+    
+    CloseHandle(hVolume);
+    return -1;
+}
+
+// ============================================
+// 枚举指定磁盘上的 ESP 分区
+// 只枚举属于指定物理磁盘的 FAT32 分区
+// ============================================
+INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
 {
     INT count = 0;
     INT maxPartitions = 32;
+    WCHAR volumeName[MAX_PATH];
+    HANDLE hFind = INVALID_HANDLE_VALUE;
     
     *partitions = (PARTITION_INFO*)calloc(maxPartitions, sizeof(PARTITION_INFO));
     if (!*partitions) return 0;
     
-    // 遍历 C: 到 Z:
-    for (WCHAR d = L'C'; d <= L'Z'; d++) {
-        WCHAR rootPath[8];
-        rootPath[0] = d;
-        rootPath[1] = L':';
-        rootPath[2] = L'\\';
-        rootPath[3] = L'\0';
+    // 枚举所有卷 (\\.\Volume{GUID}\)
+    hFind = FindFirstVolumeW(volumeName, MAX_PATH);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    
+    do {
+        // 获取此卷的盘符 (如果有)
+        WCHAR pathNames[MAX_PATH] = {0};
+        DWORD pathNamesLen = 0;
         
-        // 检查盘符类型
-        UINT driveType = GetDriveTypeW(rootPath);
-        if (driveType != DRIVE_FIXED && driveType != DRIVE_REMOVABLE) {
+        if (!GetVolumePathNamesForVolumeNameW(volumeName, pathNames, MAX_PATH, &pathNamesLen)) {
+            // 没有盘符的卷，跳过 (或者可以临时挂载检查)
             continue;
         }
         
-        // 获取文件系统
+        // 如果没有盘符，跳过
+        if (pathNames[0] == L'\0' || pathNames[0] == L'\\') {
+            continue;
+        }
+        
+        // 获取卷所属的磁盘编号
+        INT volDiskNum = GetVolumeDiskNumber(volumeName);
+        if (volDiskNum < 0 || volDiskNum != diskNumber) {
+            // 不属于选中的磁盘，跳过
+            continue;
+        }
+        
+        // 获取文件系统信息
         WCHAR fsName[32] = {0};
         WCHAR volumeLabel[128] = {0};
         
-        if (!GetVolumeInformationW(rootPath, volumeLabel, 128, 
+        if (!GetVolumeInformationW(volumeName, volumeLabel, 128, 
                                     NULL, NULL, NULL, fsName, 32)) {
             continue;
         }
         
-        // 检查 FAT32
+        // 检查是否为 FAT32
         BOOL isFat32 = (_wcsicmp(fsName, L"FAT32") == 0 || 
                         _wcsicmp(fsName, L"FAT") == 0);
         
-        if (!isFat32) continue;
+        if (!isFat32) {
+            continue;
+        }
+        
+        // 构建根路径 (X:\)
+        WCHAR rootPath[8];
+        rootPath[0] = pathNames[0];  // 盘符
+        rootPath[1] = L':';
+        rootPath[2] = L'\\';
+        rootPath[3] = L'\0';
         
         // 检查 EFI 文件夹
         BOOL hasEfi = CheckEfiFolder(rootPath);
         
         // 添加到列表
-        (*partitions)[count].driveLetter = d;
+        (*partitions)[count].driveLetter = pathNames[0];
         wcsncpy((*partitions)[count].fileSystem, fsName, 32);
         (*partitions)[count].isESP = hasEfi;
         
@@ -249,19 +308,21 @@ INT EnumEspPartitions(PARTITION_INFO** partitions)
         if (hasEfi) {
             if (wcslen(volumeLabel) > 0) {
                 swprintf((*partitions)[count].label, 128, 
-                    L"ESP 分区 - %s (%s) [%c:]", fsName, volumeLabel, d);
+                    L"ESP 分区 - %s (%s) [%c:]", fsName, volumeLabel, pathNames[0]);
             } else {
                 swprintf((*partitions)[count].label, 128, 
-                    L"ESP 分区 - %s [%c:]", fsName, d);
+                    L"ESP 分区 - %s [%c:]", fsName, pathNames[0]);
             }
         } else {
             swprintf((*partitions)[count].label, 128, 
-                L"FAT32 分区 [%c:] (不是 ESP)", d);
+                L"FAT32 分区 [%c:] (不是 ESP)", pathNames[0]);
         }
         
         count++;
-    }
+        
+    } while (FindNextVolumeW(hFind, volumeName, MAX_PATH));
     
+    FindVolumeClose(hFind);
     return count;
 }
 
@@ -390,15 +451,14 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
     }
     SendMessageW(hComboDisk, CB_SETCURSEL, 0, 0);
     
-    // 枚举 ESP 分区并填充
-    data.partitionCount = EnumEspPartitions(&data.partitions);
-    for (INT i = 0; i < data.partitionCount; i++) {
-        SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)data.partitions[i].label);
-        if (data.partitions[i].isESP) {
-            SendMessageW(hComboPart, CB_SETCURSEL, i, 0);
-            data.selectedPartition = i;
-        }
-    }
+    // 初始时分区下拉框显示提示，等待用户选择磁盘
+    SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)L"(请先选择磁盘)");
+    SendMessageW(hComboPart, CB_SETCURSEL, 0, 0);
+    EnableWindow(hComboPart, FALSE);  // 禁用，直到选择磁盘
+    
+    // 存储控件句柄到 data (用于后续更新)
+    data.hComboDisk = hComboDisk;
+    data.hComboPart = hComboPart;
     
     // 居中显示
     RECT rcDlg, rcParent;
@@ -481,7 +541,41 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
                 }
             } else if (LOWORD(msg.wParam) == IDC_COMBO_DISK) {
                 if (HIWORD(msg.wParam) == CBN_SELCHANGE) {
+                    // 用户选择了磁盘，更新分区列表
                     data.selectedDisk = (INT)SendMessageW(hComboDisk, CB_GETCURSEL, 0, 0);
+                    
+                    // 获取选中的磁盘编号
+                    INT diskNum = data.disks[data.selectedDisk].diskNumber;
+                    
+                    // 释放旧的分区列表
+                    if (data.partitions) {
+                        FreePartitionList(data.partitions, data.partitionCount);
+                        data.partitions = NULL;
+                        data.partitionCount = 0;
+                    }
+                    
+                    // 清空分区下拉框
+                    SendMessageW(hComboPart, CB_RESETCONTENT, 0, 0);
+                    
+                    // 枚举选中磁盘上的 ESP 分区
+                    data.partitionCount = EnumEspPartitionsForDisk(diskNum, &data.partitions);
+                    
+                    if (data.partitionCount > 0) {
+                        // 填充分区列表
+                        for (INT i = 0; i < data.partitionCount; i++) {
+                            SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)data.partitions[i].label);
+                            if (data.partitions[i].isESP) {
+                                SendMessageW(hComboPart, CB_SETCURSEL, i, 0);
+                                data.selectedPartition = i;
+                            }
+                        }
+                        EnableWindow(hComboPart, TRUE);  // 启用分区下拉框
+                    } else {
+                        // 没有找到分区
+                        SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)L"(此磁盘上没有 FAT32 分区)");
+                        SendMessageW(hComboPart, CB_SETCURSEL, 0, 0);
+                        EnableWindow(hComboPart, FALSE);
+                    }
                 }
             } else if (LOWORD(msg.wParam) == IDC_COMBO_PARTITION) {
                 if (HIWORD(msg.wParam) == CBN_SELCHANGE) {
