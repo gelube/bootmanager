@@ -69,7 +69,11 @@ enum {
     ID_EDIT_BACKUP_PATH = 400, ID_BTN_BROWSE_BKP,
     ID_BTN_BACKUP_MBR, ID_BTN_BACKUP_BCD, ID_BTN_BACKUP_NV,
     ID_BTN_RESTORE, ID_BTN_REPAIR,
-    ID_STATUS_TEXT = 500
+    ID_STATUS_TEXT = 500,
+    // 下拉菜单项 ID
+    ID_MENU_ADD_EFI = 601,
+    ID_MENU_ADD_WIM = 602,
+    ID_MENU_ADD_VHD = 603
 };
 
 // ============================================
@@ -300,85 +304,99 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             SetStatus(L"✓ 列表已刷新");
             break;
         
-        // 添加启动项 - 类型选择对话框
+        // 添加启动项 - 下拉菜单
         case ID_BTN_ADD_ENTRY: {
-            // 创建类型选择对话框
-            WCHAR message[] = L"请选择启动项类型:\n\n确定 - EFI 启动项 (普通)\n取消 - 返回";
-            int result = MessageBoxW(hWnd, message, L"添加启动项", MB_OKCANCEL | MB_ICONQUESTION);
+            // 获取按钮位置
+            HWND hBtn = GetDlgItem(hWnd, ID_BTN_ADD_ENTRY);
+            RECT rc;
+            GetWindowRect(hBtn, &rc);
             
-            if (result == IDOK) {
-                // EFI 启动项 - 简单添加
-                WCHAR name[256] = L"新启动项";
-                WCHAR devicePath[512] = L"";
-                WCHAR filePath[512] = L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi";
-                
-                SetStatus(L"⏳ 正在添加启动项...");
-                if (UefiAddBootEntry(name, devicePath, filePath, NULL)) {
-                    MessageBoxW(hWnd, L"启动项添加成功!\n\n请在列表中右键编辑详细信息。", L"完成", MB_OK | MB_ICONINFORMATION);
-                    SetStatus(L"✓ 启动项已添加");
-                    RefreshBootList();
-                } else {
-                    MessageBoxW(hWnd, L"添加失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
-                    SetStatus(L"✗ 添加失败");
-                }
+            // 创建弹出菜单
+            HMENU hMenu = CreatePopupMenu();
+            AppendMenuW(hMenu, MF_STRING, ID_MENU_ADD_EFI, L"📝 添加 EFI 启动项");
+            AppendMenuW(hMenu, MF_STRING, ID_MENU_ADD_WIM, L"📁 添加 WIM 启动");
+            AppendMenuW(hMenu, MF_STRING, ID_MENU_ADD_VHD, L"💾 添加 VHD 启动");
+            
+            // 显示下拉菜单
+            TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN,
+                rc.left, rc.bottom, 0, hWnd, NULL);
+            
+            DestroyMenu(hMenu);
+            break;
+        }
+        
+        // 菜单项处理 - 添加 EFI 启动项
+        case ID_MENU_ADD_EFI: {
+            WCHAR name[256] = L"新启动项";
+            WCHAR devicePath[512] = L"";
+            WCHAR filePath[512] = L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi";
+            
+            SetStatus(L"⏳ 正在添加启动项...");
+            if (UefiAddBootEntry(name, devicePath, filePath, NULL)) {
+                MessageBoxW(hWnd, L"启动项添加成功!\n\n请在列表中右键编辑详细信息。", L"完成", MB_OK | MB_ICONINFORMATION);
+                SetStatus(L"✓ 启动项已添加");
+                RefreshBootList();
             } else {
-                // 显示子菜单 - WIM/VHD 选择
-                WCHAR wimVhdMsg[] = L"选择启动类型:\n\n确定 - WIM 启动 (RAMDISK)\n取消 - VHD 启动";
-                int wimVhdResult = MessageBoxW(hWnd, wimVhdMsg, L"启动类型", MB_OKCANCEL | MB_ICONINFORMATION);
-                
-                if (wimVhdResult == IDOK) {
-                    // WIM 启动
-                    WCHAR wimPath[MAX_PATH] = {0};
-                    if (!WimSelectFileDialog(hWnd, wimPath, MAX_PATH)) break;
-                    
-                    WCHAR defaultName[MAX_PATH];
-                    const WCHAR* lastNameSep = wcsrchr(wimPath, L'\\');
-                    if (lastNameSep) {
-                        wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
-                        WCHAR* dot = wcschr(defaultName, L'.');
-                        if (dot) *dot = L'\0';
-                    } else {
-                        wcsncpy(defaultName, L"Windows PE", MAX_PATH);
-                    }
-                    
-                    SetStatus(L"⏳ 正在添加 WIM 启动项...");
-                    if (WimAddBootEntry(defaultName, wimPath, L"1")) {
-                        WCHAR msg[MAX_PATH + 64];
-                        swprintf(msg, MAX_PATH + 64, L"WIM 启动项添加成功!\n\n名称：%s\n路径：%s", defaultName, wimPath);
-                        MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                        SetStatus(L"✓ WIM 启动项已添加");
-                        RefreshBootList();
-                    } else {
-                        MessageBoxW(hWnd, L"WIM 启动项添加失败", L"错误", MB_OK | MB_ICONERROR);
-                        SetStatus(L"✗ 添加失败");
-                    }
-                } else {
-                    // VHD 启动
-                    WCHAR vhdPath[MAX_PATH] = {0};
-                    if (!VhdSelectFileDialog(hWnd, vhdPath, MAX_PATH)) break;
-                    
-                    WCHAR defaultName[MAX_PATH];
-                    const WCHAR* lastNameSep = wcsrchr(vhdPath, L'\\');
-                    if (lastNameSep) {
-                        wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
-                        WCHAR* dot = wcschr(defaultName, L'.');
-                        if (dot) *dot = L'\0';
-                    } else {
-                        wcsncpy(defaultName, L"VHD Windows", MAX_PATH);
-                    }
-                    
-                    SetStatus(L"⏳ 正在添加 VHD 启动项...");
-                    if (VhdAddBootEntry(defaultName, vhdPath)) {
-                        WCHAR msg[MAX_PATH + 64];
-                        swprintf(msg, MAX_PATH + 64, L"VHD 启动项添加成功!\n\n名称：%s\n路径：%s", defaultName, vhdPath);
-                        MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                        SetStatus(L"✓ VHD 启动项已添加");
-                        RefreshBootList();
-                    } else {
-                        MessageBoxW(hWnd, L"VHD 启动项添加失败", L"错误", MB_OK | MB_ICONERROR);
-                        SetStatus(L"✗ 添加失败");
-                    }
-                }
+                MessageBoxW(hWnd, L"添加失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 添加失败");
+            }
+            break;
+        }
+        
+        // 菜单项处理 - 添加 WIM 启动
+        case ID_MENU_ADD_WIM: {
+            WCHAR wimPath[MAX_PATH] = {0};
+            if (!WimSelectFileDialog(hWnd, wimPath, MAX_PATH)) break;
+            
+            WCHAR defaultName[MAX_PATH];
+            const WCHAR* lastNameSep = wcsrchr(wimPath, L'\\');
+            if (lastNameSep) {
+                wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
+                WCHAR* dot = wcschr(defaultName, L'.');
+                if (dot) *dot = L'\0';
+            } else {
+                wcsncpy(defaultName, L"Windows PE", MAX_PATH);
+            }
+            
+            SetStatus(L"⏳ 正在添加 WIM 启动项...");
+            if (WimAddBootEntry(defaultName, wimPath, L"1")) {
+                WCHAR msg[MAX_PATH + 64];
+                swprintf(msg, MAX_PATH + 64, L"WIM 启动项添加成功!\n\n名称：%s\n路径：%s", defaultName, wimPath);
+                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
+                SetStatus(L"✓ WIM 启动项已添加");
+                RefreshBootList();
+            } else {
+                MessageBoxW(hWnd, L"WIM 启动项添加失败", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 添加失败");
+            }
+            break;
+        }
+        
+        // 菜单项处理 - 添加 VHD 启动
+        case ID_MENU_ADD_VHD: {
+            WCHAR vhdPath[MAX_PATH] = {0};
+            if (!VhdSelectFileDialog(hWnd, vhdPath, MAX_PATH)) break;
+            
+            WCHAR defaultName[MAX_PATH];
+            const WCHAR* lastNameSep = wcsrchr(vhdPath, L'\\');
+            if (lastNameSep) {
+                wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
+                WCHAR* dot = wcschr(defaultName, L'.');
+                if (dot) *dot = L'\0';
+            } else {
+                wcsncpy(defaultName, L"VHD Windows", MAX_PATH);
+            }
+            
+            SetStatus(L"⏳ 正在添加 VHD 启动项...");
+            if (VhdAddBootEntry(defaultName, vhdPath)) {
+                WCHAR msg[MAX_PATH + 64];
+                swprintf(msg, MAX_PATH + 64, L"VHD 启动项添加成功!\n\n名称：%s\n路径：%s", defaultName, vhdPath);
+                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
+                SetStatus(L"✓ VHD 启动项已添加");
+                RefreshBootList();
+            } else {
+                MessageBoxW(hWnd, L"VHD 启动项添加失败", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 添加失败");
             }
             break;
         }
@@ -689,19 +707,21 @@ static void SwitchPage(int page)
 // ============================================
 static void BuildUEFIPage(HWND hParent)
 {
-    RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right - CONTENT_PADDING * 2;
+    (void)hParent;  // 使用主窗口创建控件，确保消息正确传递
+    
+    RECT rc; GetClientRect(g_hMainWnd, &rc);
+    int w = rc.right - SIDEBAR_WIDTH - CONTENT_PADDING * 2;
     int h = rc.bottom;
     
     HWND hTitle = CreateWindowExW(0, L"STATIC", L"UEFI 引导管理",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING, w, 32,
-        hParent, NULL, NULL, NULL);
+        WS_CHILD | WS_VISIBLE, SIDEBAR_WIDTH + CONTENT_PADDING, CONTENT_PADDING, w, 32,
+        g_hMainWnd, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
     
     g_hListView = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEW, NULL,
         WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL,
-        CONTENT_PADDING, CONTENT_PADDING + 50, w, h - 200,
-        hParent, (HMENU)ID_LIST_BOOT, NULL, NULL);
+        SIDEBAR_WIDTH + CONTENT_PADDING, CONTENT_PADDING + 50, w, h - 200,
+        g_hMainWnd, (HMENU)ID_LIST_BOOT, NULL, NULL);
     ListView_SetExtendedListViewStyle(g_hListView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
     
     LVCOLUMN lvc = {0}; lvc.mask = LVCF_TEXT | LVCF_WIDTH;
@@ -711,24 +731,24 @@ static void BuildUEFIPage(HWND hParent)
     
     RefreshBootList();
     
-    // 按钮
-    int bx = CONTENT_PADDING, by = h - 130;
-    #define BTN(id, text, w) CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE, bx, by, w, BTN_HEIGHT, hParent, (HMENU)id, NULL, NULL); SendMessageW(GetDlgItem(hParent, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); bx += w + 10;
+    // 按钮 - 创建在主窗口上
+    int bx = SIDEBAR_WIDTH + CONTENT_PADDING, by = h - 130;
+    #define BTN(id, text, wd) CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE, bx, by, wd, BTN_HEIGHT, g_hMainWnd, (HMENU)id, NULL, NULL); SendMessageW(GetDlgItem(g_hMainWnd, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); bx += wd + 10;
     
     BTN(ID_BTN_REFRESH, L"🔄 刷新", 90);
-    BTN(ID_BTN_ADD_ENTRY, L"➕ 添加启动项", 130);
+    BTN(ID_BTN_ADD_ENTRY, L"▼ 添加", 130);
     BTN(ID_BTN_DELETE_ENTRY, L"🗑 删除", 90);
     BTN(ID_BTN_MOVE_UP, L"↑ 上移", 70);
     BTN(ID_BTN_MOVE_DOWN, L"↓ 下移", 70);
     BTN(ID_BTN_SET_DEFAULT, L"⭐ 设为默认", 110);
     
-    bx = CONTENT_PADDING; by = h - 80;
+    bx = SIDEBAR_WIDTH + CONTENT_PADDING; by = h - 80;
     BTN(ID_BTN_MBR_FIX, L"🔧 修复 MBR", 100);
     
     #undef BTN
     
     g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 30, w, 24, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
+        WS_CHILD | WS_VISIBLE, SIDEBAR_WIDTH + CONTENT_PADDING, h - 30, w, 24, g_hMainWnd, (HMENU)ID_STATUS_TEXT, NULL, NULL);
     SendMessageW(g_hStatusText, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
