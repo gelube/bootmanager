@@ -227,85 +227,49 @@ static BOOL CheckEfiFolder(const WCHAR* rootPath)
 
 
 // ============================================
-// 获取卷所属的物理磁盘编号
-// 使用 IOCTL_STORAGE_GET_DEVICE_NUMBER
-// 返回 -1 表示失败或无法关联到物理磁盘
-// ============================================
-INT GetVolumeDiskNumber(const WCHAR* volumeName)
-{
-    HANDLE hVolume = INVALID_HANDLE_VALUE;
-    STORAGE_DEVICE_NUMBER storageNum = {0};
-    DWORD bytesReturned = 0;
-    
-    // 打开卷句柄 (例如: \\\\.\\C: 或 \\\\.\\Volume{...})
-    hVolume = CreateFileW(volumeName, 0, 
-        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, 
-        OPEN_EXISTING, 0, NULL);
-    
-    if (hVolume == INVALID_HANDLE_VALUE) {
-        return -1;
-    }
-    
-    // 获取设备编号
-    if (DeviceIoControl(hVolume, IOCTL_STORAGE_GET_DEVICE_NUMBER,
-        NULL, 0, &storageNum, sizeof(storageNum), &bytesReturned, NULL)) {
-        
-        CloseHandle(hVolume);
-        return (INT)storageNum.DeviceNumber;
-    }
-    
-    CloseHandle(hVolume);
-    return -1;
-}
-
-// ============================================
-// 枚举指定磁盘上的 ESP 分区
-// 只枚举属于指定物理磁盘的 FAT32 分区
+// 枚举 ESP 分区
+// 通过 FAT/FAT32 + EFI 目录判定，不再依赖物理磁盘编号
 // ============================================
 INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
 {
+    (void)diskNumber;
+
     INT count = 0;
     INT maxPartitions = 32;
     WCHAR volumeName[MAX_PATH];
     HANDLE hFind = INVALID_HANDLE_VALUE;
-    
+
     *partitions = (PARTITION_INFO*)calloc(maxPartitions, sizeof(PARTITION_INFO));
     if (!*partitions) return 0;
-    
+
     // 枚举所有卷 (\\.\Volume{GUID}\)
     hFind = FindFirstVolumeW(volumeName, MAX_PATH);
     if (hFind == INVALID_HANDLE_VALUE) {
         return 0;
     }
-    
+
     do {
         // 获取此卷的盘符 (如果有)
         WCHAR pathNames[MAX_PATH] = {0};
         DWORD pathNamesLen = 0;
         BOOL hasDriveLetter = GetVolumePathNamesForVolumeNameW(volumeName, pathNames, MAX_PATH, &pathNamesLen);
-        
-        // 获取磁盘编号
-        INT volDiskNum = GetVolumeDiskNumber(volumeName);
-        if (volDiskNum < 0 || volDiskNum != diskNumber) {
-            continue;  // 不属于选中的磁盘
-        }
-        
+
         // 获取文件系统
         WCHAR fsName[32] = {0};
         WCHAR volumeLabel[128] = {0};
         if (!GetVolumeInformationW(volumeName, volumeLabel, 128, NULL, NULL, NULL, fsName, 32)) {
             continue;
         }
-        
-        // 检查 FAT32
+
+        // 仅处理 FAT/FAT32 分区
         if (_wcsicmp(fsName, L"FAT32") != 0 && _wcsicmp(fsName, L"FAT") != 0) {
             continue;
         }
-        
+
         // 检查 EFI 文件夹
         BOOL hasEfi = FALSE;
         WCHAR driveLetter = L'\0';
-        
+
         if (hasDriveLetter && pathNames[0] != L'\0' && pathNames[0] != L'\\') {
             // 有盘符，直接检查
             driveLetter = pathNames[0];
@@ -326,27 +290,27 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
                 }
             }
         }
-        
+
         // 如果找到 EFI 文件夹，添加到列表
         if (hasEfi && driveLetter != L'\0') {
             (*partitions)[count].driveLetter = driveLetter;
             wcsncpy((*partitions)[count].fileSystem, fsName, 32);
             (*partitions)[count].isESP = TRUE;
-            
+
             // 构建显示名称
             if (wcslen(volumeLabel) > 0) {
-                swprintf((*partitions)[count].label, 128, 
+                swprintf((*partitions)[count].label, 128,
                     L"ESP 分区 - %s (%s) [%c:]", fsName, volumeLabel, driveLetter);
             } else {
-                swprintf((*partitions)[count].label, 128, 
+                swprintf((*partitions)[count].label, 128,
                     L"ESP 分区 - %s [%c:]", fsName, driveLetter);
             }
-            
+
             count++;
         }
-        
+
     } while (FindNextVolumeW(hFind, volumeName, MAX_PATH));
-    
+
     FindVolumeClose(hFind);
     return count;
 }
@@ -373,93 +337,197 @@ VOID FreePartitionList(PARTITION_INFO* partitions, INT count)
 // 使用代码创建对话框 (简化版本)
 // 直接创建窗口模拟对话框
 // ============================================
+static void UpdatePartitionCombo(ADD_EFI_DIALOG_DATA* data)
+{
+    HWND hComboDisk = data->hComboDisk;
+    HWND hComboPart = data->hComboPart;
+
+    INT sel = (INT)SendMessageW(hComboDisk, CB_GETCURSEL, 0, 0);
+    data->selectedDisk = sel;
+    data->selectedPartition = -1;
+
+    if (data->partitions) {
+        FreePartitionList(data->partitions, data->partitionCount);
+        data->partitions = NULL;
+        data->partitionCount = 0;
+    }
+
+    SendMessageW(hComboPart, CB_RESETCONTENT, 0, 0);
+
+    if (sel == CB_ERR || sel < 0 || sel >= data->diskCount) {
+        SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)L"(请先选择磁盘)");
+        SendMessageW(hComboPart, CB_SETCURSEL, 0, 0);
+        EnableWindow(hComboPart, FALSE);
+        return;
+    }
+
+    INT diskNum = data->disks[sel].diskNumber;
+    data->partitionCount = EnumEspPartitionsForDisk(diskNum, &data->partitions);
+
+    if (data->partitionCount <= 0) {
+        SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)L"(此磁盘上没有 FAT32 分区)");
+        SendMessageW(hComboPart, CB_SETCURSEL, 0, 0);
+        EnableWindow(hComboPart, FALSE);
+        return;
+    }
+
+    for (INT i = 0; i < data->partitionCount; ++i) {
+        SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)data->partitions[i].label);
+        if (data->partitions[i].isESP && data->selectedPartition == -1) {
+            data->selectedPartition = i;
+        }
+    }
+
+    if (data->selectedPartition < 0) {
+        data->selectedPartition = 0;
+    }
+
+    SendMessageW(hComboPart, CB_SETCURSEL, data->selectedPartition, 0);
+    EnableWindow(hComboPart, TRUE);
+}
+
+static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    ADD_EFI_DIALOG_DATA* data = (ADD_EFI_DIALOG_DATA*)GetWindowLongPtrW(hDlg, GWLP_USERDATA);
+
+    switch (msg) {
+    case WM_NCCREATE:
+        SetWindowLongPtrW(hDlg, GWLP_USERDATA,
+            (LONG_PTR)((CREATESTRUCTW*)lParam)->lpCreateParams);
+        return TRUE;
+
+    case WM_COMMAND:
+        if (!data) break;
+
+        switch (LOWORD(wParam)) {
+        case IDC_COMBO_DISK:
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                UpdatePartitionCombo(data);
+                return 0;
+            }
+            break;
+
+        case IDC_COMBO_PARTITION:
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                data->selectedPartition =
+                    (INT)SendMessageW(data->hComboPart, CB_GETCURSEL, 0, 0);
+                return 0;
+            }
+            break;
+        }
+        break;
+    }
+
+    return DefWindowProcW(hDlg, msg, wParam, lParam);
+}
+
 static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
 {
+    static const WCHAR kAddEfiDialogClass[] = L"BootManagerAddEfiDialog";
+    static BOOL classRegistered = FALSE;
+
     ADD_EFI_DIALOG_DATA data = {0};
     data.menuTitle[0] = L'\0';
     data.filePath[0] = L'\0';
     data.selectedDisk = 0;
     data.selectedPartition = 0;
-    
+
+    if (!classRegistered) {
+        WNDCLASSEXW wc = {0};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = AddEfiDialogProc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = kAddEfiDialogClass;
+
+        if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            return IDCANCEL;
+        }
+        classRegistered = TRUE;
+    }
+
     // 创建对话框窗口 - 增加高度以容纳所有控件
     HWND hDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE,
-        L"#32770",  // 对话框类
+        kAddEfiDialogClass,
         L"添加 EFI 启动项",
         DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        0, 0, 420, 380,  // 增加高度到 380
+        0, 0, 420, 380,
         hParent,
         NULL,
-        GetModuleHandle(NULL),
-        NULL
+        GetModuleHandleW(NULL),
+        &data
     );
-    
+
     if (!hDlg) return IDCANCEL;
-    
+
+    data.hDlg = hDlg;
+
     // 禁用父窗口 (模态)
     EnableWindow(hParent, FALSE);
-    
+
     // 创建控件
     // 静态文本 - 菜单标题
     CreateWindowExW(0, L"STATIC", L"菜单标题:",
         WS_CHILD | WS_VISIBLE,
         20, 20, 80, 20, hDlg, NULL, NULL, NULL);
-    
+
     // 编辑框 - 菜单标题 (默认值改为英文)
     HWND hEditTitle = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"New Boot Entry",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
         20, 45, 360, 28, hDlg, (HMENU)IDC_EDIT_TITLE, NULL, NULL);
-    
+
     // 提示文本
     CreateWindowExW(0, L"STATIC", L"(启动项显示名称)",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         20, 78, 200, 16, hDlg, (HMENU)IDC_STATIC_HINT, NULL, NULL);
-    
+
     // 静态文本 - 启动磁盘
     CreateWindowExW(0, L"STATIC", L"启动磁盘:",
         WS_CHILD | WS_VISIBLE,
         20, 105, 80, 20, hDlg, NULL, NULL, NULL);
-    
+
     // 下拉框 - 启动磁盘
     HWND hComboDisk = CreateWindowExW(0, L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
         20, 130, 360, 100, hDlg, (HMENU)IDC_COMBO_DISK, NULL, NULL);
-    
+
     // 静态文本 - 启动分区
     CreateWindowExW(0, L"STATIC", L"启动分区:",
         WS_CHILD | WS_VISIBLE,
         20, 170, 80, 20, hDlg, NULL, NULL, NULL);
-    
+
     // 下拉框 - 启动分区
     HWND hComboPart = CreateWindowExW(0, L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
         20, 195, 360, 100, hDlg, (HMENU)IDC_COMBO_PARTITION, NULL, NULL);
-    
+
     // 静态文本 - 启动文件
     CreateWindowExW(0, L"STATIC", L"启动文件:",
         WS_CHILD | WS_VISIBLE,
         20, 235, 80, 20, hDlg, NULL, NULL, NULL);
-    
+
     // 编辑框 - 启动文件
     HWND hEditPath = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
         20, 260, 280, 28, hDlg, (HMENU)IDC_EDIT_PATH, NULL, NULL);
-    
+
     // 浏览按钮
     CreateWindowExW(0, L"BUTTON", L"浏览...",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         310, 260, 70, 28, hDlg, (HMENU)IDC_BTN_BROWSE, NULL, NULL);
-    
+
     // 确定按钮 (居中布局)
     HWND hBtnOK = CreateWindowExW(0, L"BUTTON", L"确定",
         WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
         140, 320, 90, 32, hDlg, (HMENU)IDOK, NULL, NULL);
-    
+
     // 取消按钮 (居中布局)
     HWND hBtnCancel = CreateWindowExW(0, L"BUTTON", L"取消",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         250, 320, 90, 32, hDlg, (HMENU)IDCANCEL, NULL, NULL);
-    
+
     // 设置字体 (使用系统对话框字体)
     HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     SendMessageW(hEditTitle, WM_SETFONT, (WPARAM)hFont, TRUE);
@@ -468,77 +536,67 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
     SendMessageW(hEditPath, WM_SETFONT, (WPARAM)hFont, TRUE);
     SendMessageW(hBtnOK, WM_SETFONT, (WPARAM)hFont, TRUE);
     SendMessageW(hBtnCancel, WM_SETFONT, (WPARAM)hFont, TRUE);
-    
+
+    // 存储控件句柄到 data (用于后续更新)
+    data.hComboDisk = hComboDisk;
+    data.hComboPart = hComboPart;
+
     // 枚举磁盘并填充
     data.diskCount = EnumPhysicalDisks(&data.disks);
     for (INT i = 0; i < data.diskCount; i++) {
         SendMessageW(hComboDisk, CB_ADDSTRING, 0, (LPARAM)data.disks[i].diskName);
     }
-    SendMessageW(hComboDisk, CB_SETCURSEL, 0, 0);
-    
-    // 初始时分区下拉框显示提示，等待用户选择磁盘
-    SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)L"(请先选择磁盘)");
-    SendMessageW(hComboPart, CB_SETCURSEL, 0, 0);
-    EnableWindow(hComboPart, FALSE);  // 禁用，直到选择磁盘
-    
-    // 存储控件句柄到 data (用于后续更新)
-    data.hComboDisk = hComboDisk;
-    data.hComboPart = hComboPart;
-    
+
+    if (data.diskCount > 0) {
+        SendMessageW(hComboDisk, CB_SETCURSEL, 0, 0);
+    }
+
+    // 初始化分区列表，默认跟随当前磁盘选择
+    UpdatePartitionCombo(&data);
+
     // 居中显示
     RECT rcDlg, rcParent;
     GetWindowRect(hDlg, &rcDlg);
     GetWindowRect(hParent, &rcParent);
-    
+
     int x = rcParent.left + (rcParent.right - rcParent.left - (rcDlg.right - rcDlg.left)) / 2;
     int y = rcParent.top + (rcParent.bottom - rcParent.top - (rcDlg.bottom - rcDlg.top)) / 2;
     SetWindowPos(hDlg, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-    
+
     // 设置焦点
     SetFocus(hEditTitle);
     SendMessageW(hEditTitle, EM_SETSEL, 0, -1);
-    
+
     // 消息循环 (模态)
     MSG msg;
     BOOL bRet;
     INT_PTR result = IDCANCEL;
-    BOOL processing = FALSE;  // 防止重入
-    
+
     while (IsWindow(hDlg)) {
         bRet = GetMessageW(&msg, NULL, 0, 0);
         if (bRet == 0 || bRet == -1) break;
-        
-        if (msg.hwnd == hDlg || IsChild(hDlg, msg.hwnd)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        } else {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-        
-        // 检查是否点击了确定/取消
-        if (msg.message == WM_COMMAND && !processing) {
-            processing = TRUE;
-            
+
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+
+        if (msg.message == WM_COMMAND) {
             if (LOWORD(msg.wParam) == IDOK) {
                 // 验证输入
                 GetDlgItemTextW(hDlg, IDC_EDIT_TITLE, data.menuTitle, 256);
                 GetDlgItemTextW(hDlg, IDC_EDIT_PATH, data.filePath, 512);
-                
+
                 if (wcslen(data.menuTitle) == 0) {
                     MessageBoxW(hDlg, L"请输入菜单标题", L"提示", MB_OK | MB_ICONWARNING);
                     SetFocus(hEditTitle);
-                    processing = FALSE;
                     continue;
                 }
-                
+
                 if (wcslen(data.filePath) == 0) {
                     MessageBoxW(hDlg, L"请输入启动文件路径", L"提示", MB_OK | MB_ICONWARNING);
                     SetFocus(hEditPath);
-                    processing = FALSE;
                     continue;
                 }
-                
+
                 result = IDOK;
                 break;
             } else if (LOWORD(msg.wParam) == IDCANCEL) {
@@ -547,12 +605,11 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
             } else if (LOWORD(msg.wParam) == IDC_BTN_BROWSE) {
                 // 浏览文件 - 修复文件对话框
                 OPENFILENAMEW ofn = {0};
-                // 使用双\0 分隔的过滤器字符串
                 WCHAR szFilter[] = L"EFI Files (*.efi)\0*.efi\0All Files (*.*)\0*.*\0";
                 WCHAR filePath[MAX_PATH] = {0};
-                
+
                 ofn.lStructSize = sizeof(OPENFILENAMEW);
-                ofn.hwndOwner = hDlg;  // 关键：使用对话框句柄
+                ofn.hwndOwner = hDlg;
                 ofn.lpstrFilter = szFilter;
                 ofn.nFilterIndex = 1;
                 ofn.lpstrFile = filePath;
@@ -560,85 +617,38 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
                 ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
                 ofn.lpstrDefExt = L"efi";
                 ofn.lpstrTitle = L"选择 EFI 启动文件";
-                
+
                 if (GetOpenFileNameW(&ofn)) {
                     SetDlgItemTextW(hDlg, IDC_EDIT_PATH, filePath);
                 }
-            } else if (LOWORD(msg.wParam) == IDC_COMBO_DISK) {
-                if (HIWORD(msg.wParam) == CBN_SELCHANGE) {
-                    // 用户选择了磁盘，更新分区列表
-                    data.selectedDisk = (INT)SendMessageW(hComboDisk, CB_GETCURSEL, 0, 0);
-                    
-                    // 获取选中的磁盘编号
-                    INT diskNum = data.disks[data.selectedDisk].diskNumber;
-                    
-                    // 释放旧的分区列表
-                    if (data.partitions) {
-                        FreePartitionList(data.partitions, data.partitionCount);
-                        data.partitions = NULL;
-                        data.partitionCount = 0;
-                    }
-                    
-                    // 清空分区下拉框
-                    SendMessageW(hComboPart, CB_RESETCONTENT, 0, 0);
-                    
-                    // 枚举选中磁盘上的 ESP 分区
-                    data.partitionCount = EnumEspPartitionsForDisk(diskNum, &data.partitions);
-                    
-                    if (data.partitionCount > 0) {
-                        // 填充分区列表
-                        for (INT i = 0; i < data.partitionCount; i++) {
-                            SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)data.partitions[i].label);
-                            if (data.partitions[i].isESP) {
-                                SendMessageW(hComboPart, CB_SETCURSEL, i, 0);
-                                data.selectedPartition = i;
-                            }
-                        }
-                        EnableWindow(hComboPart, TRUE);  // 启用分区下拉框
-                    } else {
-                        // 没有找到分区
-                        SendMessageW(hComboPart, CB_ADDSTRING, 0, (LPARAM)L"(此磁盘上没有 FAT32 分区)");
-                        SendMessageW(hComboPart, CB_SETCURSEL, 0, 0);
-                        EnableWindow(hComboPart, FALSE);
-                    }
-                }
-            } else if (LOWORD(msg.wParam) == IDC_COMBO_PARTITION) {
-                if (HIWORD(msg.wParam) == CBN_SELCHANGE) {
-                    data.selectedPartition = (INT)SendMessageW(hComboPart, CB_GETCURSEL, 0, 0);
-                }
             }
-            
-            processing = FALSE;
         }
-        
+
         // 处理 WM_CLOSE
         if (msg.message == WM_CLOSE) {
             result = IDCANCEL;
             break;
         }
     }
-    
+
     // 清理
     DestroyWindow(hDlg);
     EnableWindow(hParent, TRUE);
     SetForegroundWindow(hParent);
-    
+
     // 复制输出
     if (result == IDOK) {
         wcsncpy(outTitle, data.menuTitle, 256);
         wcsncpy(outPath, data.filePath, 512);
     }
-    
+
     // 释放资源
     FreeDiskList(data.disks, data.diskCount);
     FreePartitionList(data.partitions, data.partitionCount);
-    
+
     return result;
 }
 
-// ============================================
-// 公共接口：显示添加 EFI 启动项对话框
-// ============================================
 BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
 {
     return CreateAddEfiDialog(hParent, outTitle, outPath) == IDOK;
