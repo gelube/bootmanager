@@ -166,22 +166,6 @@ INT EnumPhysicalDisks(DISK_INFO** disks)
 }
 
 // ============================================
-// 检查路径是否存在 (使用 FindFirstFile)
-// ============================================
-static BOOL PathExists(const WCHAR* path)
-{
-    WIN32_FIND_DATAW findData;
-    HANDLE hFind = FindFirstFileW(path, &findData);
-    
-    if (hFind != INVALID_HANDLE_VALUE) {
-        FindClose(hFind);
-        return TRUE;
-    }
-    
-    return FALSE;
-}
-
-// ============================================
 // 枚举 ESP 分区
 // 遍历所有盘符，查找 FAT32 格式且有 EFI 文件夹的分区
 // 同时检查 mountvol /S 挂载的分区
@@ -194,9 +178,17 @@ INT EnumEspPartitions(PARTITION_INFO** partitions)
     *partitions = (PARTITION_INFO*)calloc(maxPartitions, sizeof(PARTITION_INFO));
     if (!*partitions) return 0;
     
+    // 调试：开始枚举
+    // MessageBoxW(NULL, L"开始枚举 ESP 分区", L"调试", MB_OK);
+    
     for (WCHAR d = L'C'; d <= L'Z'; d++) {
         WCHAR root[4] = {d, L':', L'\\', 0};
         UINT driveType = GetDriveTypeW(root);
+        
+        // 跳过不存在的驱动器
+        if (driveType == DRIVE_NO_ROOT_DIR) {
+            continue;
+        }
         
         // 只检查固定磁盘、可移动磁盘
         if (driveType != DRIVE_FIXED && driveType != DRIVE_REMOVABLE) {
@@ -218,10 +210,15 @@ INT EnumEspPartitions(PARTITION_INFO** partitions)
         BOOL isFat32 = (_wcsicmp(fsName, L"FAT32") == 0 || 
                         _wcsicmp(fsName, L"FAT") == 0);
         
-        // 检查是否存在 EFI 文件夹 (使用 FindFirstFile)
-        WCHAR efiPath[MAX_PATH];
-        swprintf(efiPath, MAX_PATH, L"%sEFI\\*", root);
-        BOOL hasEfiFolder = PathExists(efiPath);
+        // 检查是否存在 EFI 文件夹 (改进：检查具体路径)
+        WCHAR efiPath1[MAX_PATH];  // X:\EFI\BOOT\bootx64.efi
+        WCHAR efiPath2[MAX_PATH];  // X:\EFI\Microsoft
+        swprintf(efiPath1, MAX_PATH, L"%sEFI\\BOOT\\bootx64.efi", root);
+        swprintf(efiPath2, MAX_PATH, L"%sEFI\\Microsoft", root);
+        
+        BOOL hasEfiBoot = (GetFileAttributesW(efiPath1) != INVALID_FILE_ATTRIBUTES);
+        BOOL hasEfiMicrosoft = (GetFileAttributesW(efiPath2) != INVALID_FILE_ATTRIBUTES);
+        BOOL hasEfiFolder = hasEfiBoot || hasEfiMicrosoft;
         
         // 如果是 FAT32 且有 EFI 文件夹，则是 ESP 分区
         if (isFat32 && hasEfiFolder) {
@@ -237,40 +234,27 @@ INT EnumEspPartitions(PARTITION_INFO** partitions)
             }
             
             count++;
-        }
-    }
-    
-    // 如果没有找到 ESP 分区，尝试检查系统保留分区
-    if (count == 0) {
-        // 检查是否有 FAT32 格式的系统分区
-        for (WCHAR d = L'C'; d <= L'Z'; d++) {
-            WCHAR root[4] = {d, L':', L'\\', 0};
-            WCHAR fsName[32] = {0};
-            
-            if (GetVolumeInformationW(root, NULL, 0, NULL, NULL, NULL, fsName, 32)) {
-                if (_wcsicmp(fsName, L"FAT32") == 0) {
-                    // FAT32 分区，即使没有 EFI 文件夹也加入列表
-                    WCHAR efiPath[MAX_PATH];
-                    swprintf(efiPath, MAX_PATH, L"%sEFI\\*", root);
-                    
-                    (*partitions)[count].driveLetter = d;
-                    (*partitions)[count].isESP = PathExists(efiPath);
-                    swprintf((*partitions)[count].label, 128, 
-                        L"FAT32 分区 [%c:]", d);
-                    wcsncpy((*partitions)[count].fileSystem, fsName, 32);
-                    count++;
-                }
-            }
+        } else if (isFat32) {
+            // FAT32 但没有 EFI 文件夹，也可能是 ESP（用户可能还未创建）
+            (*partitions)[count].isESP = FALSE;
+            swprintf((*partitions)[count].label, 128, 
+                L"FAT32 分区 - %s (%s) [%c:]", fsName, volumeLabel, d);
+            count++;
         }
     }
     
     // 如果没有找到任何分区，添加一个提示选项
     if (count == 0) {
         (*partitions)[0].driveLetter = L'\0';
-        wcsncpy((*partitions)[0].label, L"未找到 ESP 分区", 128);
+        wcsncpy((*partitions)[0].label, L"未找到 ESP 分区，请手动挂载", 128);
         (*partitions)[0].isESP = FALSE;
         count = 1;
     }
+    
+    // 调试：显示找到的分区数量
+    // WCHAR msg[64];
+    // swprintf(msg, 64, L"找到 %d 个分区", count);
+    // MessageBoxW(NULL, msg, L"调试", MB_OK);
     
     return count;
 }
@@ -427,6 +411,7 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
     MSG msg;
     BOOL bRet;
     INT_PTR result = IDCANCEL;
+    BOOL processing = FALSE;  // 防止重入
     
     while (IsWindow(hDlg)) {
         bRet = GetMessageW(&msg, NULL, 0, 0);
@@ -441,7 +426,9 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
         }
         
         // 检查是否点击了确定/取消
-        if (msg.message == WM_COMMAND) {
+        if (msg.message == WM_COMMAND && !processing) {
+            processing = TRUE;
+            
             if (LOWORD(msg.wParam) == IDOK) {
                 // 验证输入
                 GetDlgItemTextW(hDlg, IDC_EDIT_TITLE, data.menuTitle, 256);
@@ -450,12 +437,14 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
                 if (wcslen(data.menuTitle) == 0) {
                     MessageBoxW(hDlg, L"请输入菜单标题", L"提示", MB_OK | MB_ICONWARNING);
                     SetFocus(hEditTitle);
+                    processing = FALSE;
                     continue;
                 }
                 
                 if (wcslen(data.filePath) == 0) {
                     MessageBoxW(hDlg, L"请输入启动文件路径", L"提示", MB_OK | MB_ICONWARNING);
                     SetFocus(hEditPath);
+                    processing = FALSE;
                     continue;
                 }
                 
@@ -472,7 +461,7 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
                 WCHAR filePath[MAX_PATH] = {0};
                 
                 ofn.lStructSize = sizeof(OPENFILENAMEW);
-                ofn.hwndOwner = hDlg;
+                ofn.hwndOwner = hDlg;  // 关键：使用对话框句柄
                 ofn.lpstrFilter = szFilter;
                 ofn.nFilterIndex = 1;
                 ofn.lpstrFile = filePath;
@@ -493,6 +482,8 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
                     data.selectedPartition = (INT)SendMessageW(hComboPart, CB_GETCURSEL, 0, 0);
                 }
             }
+            
+            processing = FALSE;
         }
         
         // 处理 WM_CLOSE

@@ -9,15 +9,15 @@
 #include <windows.h>
 
 // 对话框 ID
-#define IDD_DIALOG_ADD_EFI  1001
+#define IDD_DIALOG_ADD_EFI  2001
 
-// 控件 ID
-#define IDC_EDIT_TITLE      1101
-#define IDC_COMBO_DISK      1102
-#define IDC_COMBO_PARTITION 1103
-#define IDC_EDIT_PATH       1104
-#define IDC_BTN_BROWSE      1105
-#define IDC_STATIC_HINT     1106
+// 控件 ID (2000+ 避免与主窗口冲突)
+#define IDC_EDIT_TITLE      2101
+#define IDC_COMBO_DISK      2102
+#define IDC_COMBO_PARTITION 2103
+#define IDC_EDIT_PATH       2104
+#define IDC_BTN_BROWSE      2105
+#define IDC_STATIC_HINT     2106
 
 // 磁盘信息结构
 typedef struct {
