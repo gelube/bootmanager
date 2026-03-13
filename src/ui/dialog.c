@@ -170,6 +170,34 @@ INT EnumPhysicalDisks(DISK_INFO** disks)
 
 
 // ============================================
+// 临时挂载卷到指定盘符
+// ============================================
+static BOOL TempMountVolume(const WCHAR* volumeGuid, WCHAR driveLetter)
+{
+    WCHAR deviceName[8];
+    deviceName[0] = driveLetter;
+    deviceName[1] = L':';
+    deviceName[2] = L'\\';
+    deviceName[3] = L'\0';
+    
+    return SetVolumeMountPointW(deviceName, volumeGuid);
+}
+
+// ============================================
+// 卸载临时卷
+// ============================================
+static BOOL TempUnmountVolume(WCHAR driveLetter)
+{
+    WCHAR deviceName[8];
+    deviceName[0] = driveLetter;
+    deviceName[1] = L':';
+    deviceName[2] = L'\\';
+    deviceName[3] = L'\0';
+    
+    return DeleteVolumeMountPointW(deviceName);
+}
+
+// ============================================
 // 检查 EFI 文件夹
 // 检查分区是否包含 EFI\BOOT 或 EFI\Microsoft 目录
 // ============================================
@@ -254,71 +282,68 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
         // 获取此卷的盘符 (如果有)
         WCHAR pathNames[MAX_PATH] = {0};
         DWORD pathNamesLen = 0;
+        BOOL hasDriveLetter = GetVolumePathNamesForVolumeNameW(volumeName, pathNames, MAX_PATH, &pathNamesLen);
         
-        if (!GetVolumePathNamesForVolumeNameW(volumeName, pathNames, MAX_PATH, &pathNamesLen)) {
-            // 没有盘符的卷，跳过 (或者可以临时挂载检查)
-            continue;
-        }
-        
-        // 如果没有盘符，跳过
-        if (pathNames[0] == L'\0' || pathNames[0] == L'\\') {
-            continue;
-        }
-        
-        // 获取卷所属的磁盘编号
+        // 获取磁盘编号
         INT volDiskNum = GetVolumeDiskNumber(volumeName);
         if (volDiskNum < 0 || volDiskNum != diskNumber) {
-            // 不属于选中的磁盘，跳过
-            continue;
+            continue;  // 不属于选中的磁盘
         }
         
-        // 获取文件系统信息
+        // 获取文件系统
         WCHAR fsName[32] = {0};
         WCHAR volumeLabel[128] = {0};
-        
-        if (!GetVolumeInformationW(volumeName, volumeLabel, 128, 
-                                    NULL, NULL, NULL, fsName, 32)) {
+        if (!GetVolumeInformationW(volumeName, volumeLabel, 128, NULL, NULL, NULL, fsName, 32)) {
             continue;
         }
         
-        // 检查是否为 FAT32
-        BOOL isFat32 = (_wcsicmp(fsName, L"FAT32") == 0 || 
-                        _wcsicmp(fsName, L"FAT") == 0);
-        
-        if (!isFat32) {
+        // 检查 FAT32
+        if (_wcsicmp(fsName, L"FAT32") != 0 && _wcsicmp(fsName, L"FAT") != 0) {
             continue;
         }
-        
-        // 构建根路径 (X:\)
-        WCHAR rootPath[8];
-        rootPath[0] = pathNames[0];  // 盘符
-        rootPath[1] = L':';
-        rootPath[2] = L'\\';
-        rootPath[3] = L'\0';
         
         // 检查 EFI 文件夹
-        BOOL hasEfi = CheckEfiFolder(rootPath);
+        BOOL hasEfi = FALSE;
+        WCHAR driveLetter = L'\0';
         
-        // 添加到列表
-        (*partitions)[count].driveLetter = pathNames[0];
-        wcsncpy((*partitions)[count].fileSystem, fsName, 32);
-        (*partitions)[count].isESP = hasEfi;
-        
-        // 构建显示名称
-        if (hasEfi) {
-            if (wcslen(volumeLabel) > 0) {
-                swprintf((*partitions)[count].label, 128, 
-                    L"ESP 分区 - %s (%s) [%c:]", fsName, volumeLabel, pathNames[0]);
-            } else {
-                swprintf((*partitions)[count].label, 128, 
-                    L"ESP 分区 - %s [%c:]", fsName, pathNames[0]);
-            }
+        if (hasDriveLetter && pathNames[0] != L'\0' && pathNames[0] != L'\\') {
+            // 有盘符，直接检查
+            driveLetter = pathNames[0];
+            WCHAR rootPath[8] = {driveLetter, L':', L'\\', 0};
+            hasEfi = CheckEfiFolder(rootPath);
         } else {
-            swprintf((*partitions)[count].label, 128, 
-                L"FAT32 分区 [%c:] (不是 ESP)", pathNames[0]);
+            // 没有盘符，临时挂载
+            for (WCHAR d = L'Z'; d >= L'C'; d--) {
+                WCHAR testPath[4] = {d, L':', L'\\', 0};
+                if (GetDriveTypeW(testPath) == DRIVE_NO_ROOT_DIR) {
+                    if (TempMountVolume(volumeName, d)) {
+                        driveLetter = d;
+                        WCHAR rootPath[8] = {d, L':', L'\\', 0};
+                        hasEfi = CheckEfiFolder(rootPath);
+                        TempUnmountVolume(d);
+                    }
+                    break;
+                }
+            }
         }
         
-        count++;
+        // 如果找到 EFI 文件夹，添加到列表
+        if (hasEfi && driveLetter != L'\0') {
+            (*partitions)[count].driveLetter = driveLetter;
+            wcsncpy((*partitions)[count].fileSystem, fsName, 32);
+            (*partitions)[count].isESP = TRUE;
+            
+            // 构建显示名称
+            if (wcslen(volumeLabel) > 0) {
+                swprintf((*partitions)[count].label, 128, 
+                    L"ESP 分区 - %s (%s) [%c:]", fsName, volumeLabel, driveLetter);
+            } else {
+                swprintf((*partitions)[count].label, 128, 
+                    L"ESP 分区 - %s [%c:]", fsName, driveLetter);
+            }
+            
+            count++;
+        }
         
     } while (FindNextVolumeW(hFind, volumeName, MAX_PATH));
     
