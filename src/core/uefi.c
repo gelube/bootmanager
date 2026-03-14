@@ -546,8 +546,13 @@ static BOOL FindEntryGuidById(UEFI_BOOT_LIST* list, DWORD id, WCHAR* guid, DWORD
     UEFI_BOOT_ENTRY* entry = list->entries;
     while (entry) {
         if (entry->id == id) {
-            // 从 devicePath 或 filePath 提取 GUID
-            // 格式通常是 {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
+            if (wcslen(entry->guid) > 0 && wcslen(entry->guid) < guidSize) {
+                wcsncpy(guid, entry->guid, guidSize - 1);
+                guid[guidSize - 1] = L'\0';
+                return TRUE;
+            }
+
+            // 兼容旧数据：从 devicePath 或 filePath 提取 GUID
             const WCHAR* start = wcsstr(entry->devicePath, L"{");
             if (!start) start = wcsstr(entry->filePath, L"{");
             if (start) {
