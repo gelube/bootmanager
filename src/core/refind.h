@@ -23,5 +23,6 @@ BOOL RefindAddNVRAMEntry(const WCHAR* description, const WCHAR* path);
 BOOL RefindRemoveNVRAMEntry(const WCHAR* description);
 BOOL RefindBackupBootx64(const WCHAR* espDrive, WCHAR* backupPath, DWORD size);
 BOOL RefindRestoreBootx64(const WCHAR* espDrive, const WCHAR* backupPath);
+const WCHAR* RefindGetLastErrorMessage(void);
 
 #endif // REFIND_H

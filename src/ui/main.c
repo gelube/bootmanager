@@ -436,9 +436,15 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;
             }
             
+            {
+                WCHAR stepMsg[128];
+                swprintf(stepMsg, 128, L"ESP 分区已挂载: %s", espDrive);
+                MessageBoxW(hWnd, stepMsg, L"rEFInd 调试", MB_OK | MB_ICONINFORMATION);
+            }
+
             SetStatus(L"⏳ 正在安装 rEFInd...");
             UpdateWindow(hWnd);
-            
+
             // 检查源文件
             if (GetFileAttributesW(L"Z:\\refind0.14.2\\refind\\refind_x64.efi") == INVALID_FILE_ATTRIBUTES) {
                 UnmountESP(espDrive[0]);
@@ -446,18 +452,19 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 SetStatus(L"✗ 源文件缺失");
                 break;
             }
-            
-            // 安装
+
+            MessageBoxW(hWnd, L"源文件路径验证成功:\nZ:\\refind0.14.2\\refind\\refind_x64.efi", L"rEFInd 调试", MB_OK | MB_ICONINFORMATION);
+
             BOOL success = RefindInstall(L"Z:\\refind0.14.2\\refind", espDrive);
-            
-            // 卸载 ESP（可选，也可以保持挂载）
-            // UnmountESP(espDrive[0]);
-            
+
             if (success) {
                 MessageBoxW(hWnd, L"rEFInd 安装成功！\n\n重启后将显示 rEFInd 启动菜单。", L"安装完成", MB_OK | MB_ICONINFORMATION);
                 SetStatus(L"✓ rEFInd 安装成功");
             } else {
-                MessageBoxW(hWnd, L"安装失败\n\n请检查:\n1. 是否以管理员身份运行\n2. 磁盘空间是否充足\n3. ESP 分区是否可写", L"错误", MB_OK | MB_ICONERROR);
+                const WCHAR* err = RefindGetLastErrorMessage();
+                WCHAR failMsg[1024];
+                swprintf(failMsg, 1024, L"安装失败\n\n错误详情: %s", (err && wcslen(err) > 0) ? err : L"未知错误");
+                MessageBoxW(hWnd, failMsg, L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 安装失败");
             }
             break;
@@ -478,13 +485,22 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;
             }
             
+            {
+                WCHAR stepMsg[128];
+                swprintf(stepMsg, 128, L"ESP 分区已挂载: %s", espDrive);
+                MessageBoxW(hWnd, stepMsg, L"rEFInd 调试", MB_OK | MB_ICONINFORMATION);
+            }
+
             BOOL success = RefindUninstall(espDrive);
             
             if (success) {
                 MessageBoxW(hWnd, L"rEFInd 已卸载\n\n将恢复 Windows 引导。", L"完成", MB_OK | MB_ICONINFORMATION);
                 SetStatus(L"✓ 卸载成功");
             } else {
-                MessageBoxW(hWnd, L"卸载失败", L"错误", MB_OK | MB_ICONERROR);
+                const WCHAR* err = RefindGetLastErrorMessage();
+                WCHAR failMsg[1024];
+                swprintf(failMsg, 1024, L"卸载失败\n\n错误详情: %s", (err && wcslen(err) > 0) ? err : L"未知错误");
+                MessageBoxW(hWnd, failMsg, L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 卸载失败");
             }
             break;
@@ -587,6 +603,34 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             break;
         }
         
+        case ID_BTN_MOVE_UP:
+        case ID_BTN_MOVE_DOWN: {
+            if (!g_hListView || !g_bootList) break;
+            int sel = ListView_GetNextItem(g_hListView, -1, LVNI_SELECTED);
+            if (sel == -1) {
+                MessageBoxW(hWnd, L"请先选择一个启动项", L"提示", MB_OK | MB_ICONINFORMATION);
+                break;
+            }
+
+            WCHAR idText[16] = {0};
+            ListView_GetItemText(g_hListView, sel, 0, idText, 16);
+            DWORD id = wcstoul(idText, NULL, 16);
+
+            SetStatus((LOWORD(wParam) == ID_BTN_MOVE_UP) ? L"⏳ 正在上移..." : L"⏳ 正在下移...");
+            BOOL ok = (LOWORD(wParam) == ID_BTN_MOVE_UP)
+                ? UefiMoveBootEntryUp(g_bootList, id)
+                : UefiMoveBootEntryDown(g_bootList, id);
+
+            if (ok) {
+                SetStatus(L"✓ BootOrder 已更新");
+                RefreshBootList();
+            } else {
+                MessageBoxW(hWnd, L"调整顺序失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 调整失败");
+            }
+            break;
+        }
+
         case ID_BTN_SET_DEFAULT: {
             if (!g_hListView) break;
             int sel = ListView_GetNextItem(g_hListView, -1, LVNI_SELECTED);
@@ -730,48 +774,45 @@ static void SwitchPage(int page)
 // ============================================
 static void BuildUEFIPage(HWND hParent)
 {
-    (void)hParent;  // 使用主窗口创建控件，确保消息正确传递
-    
-    RECT rc; GetClientRect(g_hMainWnd, &rc);
-    int w = rc.right - SIDEBAR_WIDTH - CONTENT_PADDING * 2;
+    RECT rc; GetClientRect(hParent, &rc);
+    int w = rc.right - CONTENT_PADDING * 2;
     int h = rc.bottom;
-    
+
     HWND hTitle = CreateWindowExW(0, L"STATIC", L"UEFI 引导管理",
-        WS_CHILD | WS_VISIBLE, SIDEBAR_WIDTH + CONTENT_PADDING, CONTENT_PADDING, w, 32,
-        g_hMainWnd, NULL, NULL, NULL);
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING, w, 32,
+        hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-    
+
     g_hListView = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEW, NULL,
         WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL,
-        SIDEBAR_WIDTH + CONTENT_PADDING, CONTENT_PADDING + 50, w, h - 200,
-        g_hMainWnd, (HMENU)ID_LIST_BOOT, NULL, NULL);
+        CONTENT_PADDING, CONTENT_PADDING + 50, w, h - 200,
+        hParent, (HMENU)ID_LIST_BOOT, NULL, NULL);
     ListView_SetExtendedListViewStyle(g_hListView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-    
+
     LVCOLUMN lvc = {0}; lvc.mask = LVCF_TEXT | LVCF_WIDTH;
     lvc.pszText = L"ID"; lvc.cx = 80; ListView_InsertColumn(g_hListView, 0, &lvc);
     lvc.pszText = L"名称"; lvc.cx = 240; ListView_InsertColumn(g_hListView, 1, &lvc);
     lvc.pszText = L"路径"; lvc.cx = w - 340; ListView_InsertColumn(g_hListView, 2, &lvc);
-    
+
     RefreshBootList();
-    
-    // 按钮 - 创建在主窗口上
-    int bx = SIDEBAR_WIDTH + CONTENT_PADDING, by = h - 130;
-    #define BTN(id, text, wd) CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE, bx, by, wd, BTN_HEIGHT, g_hMainWnd, (HMENU)id, NULL, NULL); SendMessageW(GetDlgItem(g_hMainWnd, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); bx += wd + 10;
-    
+
+    int bx = CONTENT_PADDING, by = h - 130;
+    #define BTN(id, text, wd) CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE, bx, by, wd, BTN_HEIGHT, hParent, (HMENU)id, NULL, NULL); SendMessageW(GetDlgItem(hParent, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); bx += wd + 10;
+
     BTN(ID_BTN_REFRESH, L"🔄 刷新", 90);
     BTN(ID_BTN_ADD_ENTRY, L"▼ 添加", 130);
     BTN(ID_BTN_DELETE_ENTRY, L"🗑 删除", 90);
     BTN(ID_BTN_MOVE_UP, L"↑ 上移", 70);
     BTN(ID_BTN_MOVE_DOWN, L"↓ 下移", 70);
     BTN(ID_BTN_SET_DEFAULT, L"⭐ 设为默认", 110);
-    
-    bx = SIDEBAR_WIDTH + CONTENT_PADDING; by = h - 80;
+
+    bx = CONTENT_PADDING; by = h - 80;
     BTN(ID_BTN_MBR_FIX, L"🔧 修复 MBR", 100);
-    
+
     #undef BTN
-    
+
     g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪",
-        WS_CHILD | WS_VISIBLE, SIDEBAR_WIDTH + CONTENT_PADDING, h - 30, w, 24, g_hMainWnd, (HMENU)ID_STATUS_TEXT, NULL, NULL);
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 30, w, 24, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
     SendMessageW(g_hStatusText, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
