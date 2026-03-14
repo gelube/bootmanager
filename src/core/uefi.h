@@ -15,7 +15,9 @@ typedef struct _UEFI_BOOT_ENTRY {
     WCHAR name[256];               // 启动项名称
     WCHAR devicePath[512];         // 设备路径
     WCHAR filePath[512];           // EFI 文件路径
+    WCHAR guid[64];                // BCD identifier GUID
     BOOL active;                   // 是否激活
+    BOOL isFirmwareRegistered;     // 是否注册到 firmware
     struct _UEFI_BOOT_ENTRY* next; // 链表指针
 } UEFI_BOOT_ENTRY;
 

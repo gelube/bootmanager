@@ -159,235 +159,243 @@ static void CleanupBootEntryByGuid(const WCHAR* guid) {
     ExecuteCommand(cmd, output, sizeof(output));
 }
 
-// 解析单个 BCD 条目
-static void ParseBcdEntry(const CHAR* block, UEFI_BOOT_ENTRY* entry) {
-    // 示例输出:
-    // Windows Boot Manager
-    // --------------------
-    // identifier              {fwbootmgr}
-    // displayorder            {bootmgr} {ntldr}
-    // timeout                 30
-    
-    const CHAR* line = block;
-    CHAR name[256] = {0};
-    CHAR identifier[64] = {0};
-    CHAR device[512] = {0};
-    CHAR path[512] = {0};
-    
-    // 解析名称 (第一行)
-    const CHAR* endLine = strchr(line, '\n');
-    if (endLine) {
-        size_t nameLen = endLine - line;
-        if (nameLen > 0 && nameLen < sizeof(name)) {
-            // 去除分隔线
-            const CHAR* dash = strchr(line, '-');
-            if (dash && (dash - line) < 5) {
-                // 这是分隔线，跳过
-            } else {
-                memcpy(name, line, nameLen);
-                // 去除尾部的回车
-                char* cr = strchr(name, '\r');
-                if (cr) *cr = '\0';
-            }
-        }
+typedef enum _BCD_ENTRY_SOURCE {
+    ENTRY_SOURCE_FIRMWARE = 1,
+    ENTRY_SOURCE_BOOTAPP = 2
+} BCD_ENTRY_SOURCE;
+
+static void TrimInPlace(CHAR* str) {
+    CHAR* start = str;
+    CHAR* end;
+
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') {
+        start++;
     }
-    
-    // 解析各个字段
-    const CHAR* pos = block;
-    while (pos && *pos) {
-        // 查找 identifier
-        const CHAR* idPos = strstr(pos, "identifier");
-        if (idPos) {
-            idPos += 10; // 跳过 "identifier"
-            while (*idPos == ' ' || *idPos == '\t') idPos++;
-            
-            const CHAR* idEnd = strchr(idPos, '\n');
-            if (idEnd) {
-                size_t len = idEnd - idPos;
-                if (len > 0 && len < sizeof(identifier)) {
-                    memcpy(identifier, idPos, len);
-                    identifier[len] = '\0';
-                    char* cr = strchr(identifier, '\r');
-                    if (cr) *cr = '\0';
-                }
-            }
-        }
-        
-        // 查找 device
-        const CHAR* devPos = strstr(pos, "device");
-        if (devPos && devPos < block + strlen(block)) {
-            devPos += 6;
-            while (*devPos == ' ' || *devPos == '\t') devPos++;
-            
-            const CHAR* devEnd = strchr(devPos, '\n');
-            if (devEnd) {
-                size_t len = devEnd - devPos;
-                if (len > 0 && len < sizeof(device)) {
-                    memcpy(device, devPos, len);
-                    device[len] = '\0';
-                    char* cr = strchr(device, '\r');
-                    if (cr) *cr = '\0';
-                }
-            }
-        }
-        
-        // 查找 path
-        const CHAR* pathPos = strstr(pos, "path");
-        if (pathPos) {
-            pathPos += 4;
-            while (*pathPos == ' ' || *pathPos == '\t') pathPos++;
-            
-            const CHAR* pathEnd = strchr(pathPos, '\n');
-            if (pathEnd) {
-                size_t len = pathEnd - pathPos;
-                if (len > 0 && len < sizeof(path)) {
-                    memcpy(path, pathPos, len);
-                    path[len] = '\0';
-                    char* cr = strchr(path, '\r');
-                    if (cr) *cr = '\0';
-                }
-            }
-        }
-        
-        pos = strchr(pos + 1, '\n');
-        if (pos) pos++;
+
+    if (start != str) {
+        memmove(str, start, strlen(start) + 1);
     }
-    
-    // 填充 entry
-    if (strlen(name) > 0 && strlen(identifier) > 0) {
-        MultiByteToWideChar(CP_UTF8, 0, name, -1, entry->name, 256);
-        MultiByteToWideChar(CP_UTF8, 0, device, -1, entry->devicePath, 512);
-        MultiByteToWideChar(CP_UTF8, 0, path, -1, entry->filePath, 512);
-        
-        // 从 identifier 提取 ID (如果是 BootXXXX 格式)
-        if (strncmp(identifier, "{bootmgr}", 9) == 0) {
-            entry->id = 0x0000;
-        } else if (strncmp(identifier, "{fwbootmgr}", 10) == 0) {
-            entry->id = 0xFFFF;
-        } else if (strncmp(identifier, "{memdiag}", 9) == 0) {
-            entry->id = 0xFFFE;
-        } else if (strncmp(identifier, "{ntldr}", 7) == 0) {
-            entry->id = 0xFFFD;
-        } else {
-            // 尝试解析 GUID 或其他格式
-            entry->id = 0x0001;
-        }
-        
-        entry->active = TRUE;
-        entry->next = NULL;
+
+    end = str + strlen(str);
+    while (end > str && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) {
+        end--;
     }
+    *end = '\0';
 }
 
-// 扫描所有启动项
-UEFI_BOOT_LIST* UefiScanBootEntries(void) {
-    CHAR output[65536] = {0};  // 64KB 缓冲区
-    
-    // 执行 bcdedit /enum firmware
-    if (!ExecuteCommand(L"bcdedit /enum firmware", output, sizeof(output))) {
-        return NULL;
+static BOOL ExtractGuidFromOutput(const CHAR* output, WCHAR* guid, DWORD guidSize) {
+    const CHAR* guidStart;
+    const CHAR* guidEnd;
+    CHAR guidA[64] = {0};
+    int converted;
+
+    if (!output || !guid || guidSize < 4) return FALSE;
+
+    guid[0] = L'\0';
+    guidStart = strchr(output, '{');
+    if (!guidStart) return FALSE;
+
+    guidEnd = strchr(guidStart, '}');
+    if (!guidEnd || guidEnd <= guidStart) return FALSE;
+
+    if ((size_t)(guidEnd - guidStart + 1) >= sizeof(guidA)) return FALSE;
+
+    memcpy(guidA, guidStart, (size_t)(guidEnd - guidStart + 1));
+    guidA[guidEnd - guidStart + 1] = '\0';
+
+    converted = MultiByteToWideChar(CP_ACP, 0, guidA, -1, guid, (int)guidSize);
+    return (converted > 0);
+}
+
+static DWORD ComputeEntryIdFromGuid(const WCHAR* guid) {
+    DWORD hash = 0;
+    const WCHAR* p = guid;
+
+    while (p && *p) {
+        hash = (hash * 131U) + (DWORD)(*p++);
     }
-    
-    // 创建列表
-    UEFI_BOOT_LIST* list = (UEFI_BOOT_LIST*)malloc(sizeof(UEFI_BOOT_LIST));
-    if (!list) return NULL;
-    
-    list->entries = NULL;
-    list->count = 0;
-    list->bootOrder = NULL;
-    list->bootOrderCount = 0;
-    
-    // 解析输出 - 按空行分割条目
-    UEFI_BOOT_ENTRY* tail = NULL;
-    CHAR* pos = output;
-    CHAR block[8192];
-    int blockLen = 0;
-    
-    while (*pos) {
-        // 收集一个条目 (到空行或文件结尾)
-        blockLen = 0;
+
+    if (hash == 0) {
+        hash = 1;
+    }
+
+    return hash & 0xFFFFU;
+}
+
+// 解析单个 BCD 条目，按 key/value 字段读取，适配 firmware 和 BOOTAPP 输出格式。
+static BOOL ParseBcdEntry(const CHAR* block, UEFI_BOOT_ENTRY* entry, BCD_ENTRY_SOURCE source) {
+    CHAR copy[8192];
+    CHAR* context = NULL;
+    CHAR* line;
+    CHAR description[256] = {0};
+    CHAR identifier[128] = {0};
+    CHAR device[512] = {0};
+    CHAR path[512] = {0};
+
+    if (!block || !entry) return FALSE;
+
+    strncpy(copy, block, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+
+    line = strtok_s(copy, "\n", &context);
+    while (line) {
+        CHAR current[1024] = {0};
+        CHAR key[64] = {0};
+        CHAR value[960] = {0};
+        int parsed = 0;
+
+        strncpy(current, line, sizeof(current) - 1);
+        current[sizeof(current) - 1] = '\0';
+        TrimInPlace(current);
+
+        if (current[0] == '\0') {
+            line = strtok_s(NULL, "\n", &context);
+            continue;
+        }
+
+        if (strstr(current, "----") != NULL) {
+            line = strtok_s(NULL, "\n", &context);
+            continue;
+        }
+
+        parsed = sscanf(current, "%63s %959[^\n]", key, value);
+        if (parsed >= 2) {
+            TrimInPlace(value);
+            if (_stricmp(key, "description") == 0) {
+                strncpy(description, value, sizeof(description) - 1);
+            } else if (_stricmp(key, "identifier") == 0) {
+                strncpy(identifier, value, sizeof(identifier) - 1);
+            } else if (_stricmp(key, "device") == 0) {
+                strncpy(device, value, sizeof(device) - 1);
+            } else if (_stricmp(key, "path") == 0) {
+                strncpy(path, value, sizeof(path) - 1);
+            }
+        }
+
+        line = strtok_s(NULL, "\n", &context);
+    }
+
+    if (identifier[0] == '\0') {
+        return FALSE;
+    }
+
+    if (description[0] == '\0') {
+        strncpy(description, identifier, sizeof(description) - 1);
+    }
+
+    MultiByteToWideChar(CP_ACP, 0, description, -1, entry->name, 256);
+    MultiByteToWideChar(CP_ACP, 0, device, -1, entry->devicePath, 512);
+    MultiByteToWideChar(CP_ACP, 0, path, -1, entry->filePath, 512);
+    MultiByteToWideChar(CP_ACP, 0, identifier, -1, entry->guid, 64);
+
+    entry->id = ComputeEntryIdFromGuid(entry->guid);
+    entry->active = TRUE;
+    entry->isFirmwareRegistered = (source == ENTRY_SOURCE_FIRMWARE);
+    entry->next = NULL;
+
+    return TRUE;
+}
+
+static BOOL AddBcdEntries(UEFI_BOOT_LIST* list, const CHAR* output, BCD_ENTRY_SOURCE source) {
+    const CHAR* pos = output;
+    UEFI_BOOT_ENTRY* tail;
+
+    if (!list || !output) return FALSE;
+
+    tail = list->entries;
+    while (tail && tail->next) {
+        tail = tail->next;
+    }
+
+    while (pos && *pos) {
+        CHAR block[8192] = {0};
+        int blockLen = 0;
+
         while (*pos) {
-            if (*pos == '\r' && *(pos + 1) == '\n' && *(pos + 2) == '\r') {
-                // 空行
-                pos += 2;
+            if ((*pos == '\r' && *(pos + 1) == '\n' && *(pos + 2) == '\r' && *(pos + 3) == '\n') ||
+                (*pos == '\n' && *(pos + 1) == '\n')) {
+                while (*pos == '\r' || *pos == '\n') {
+                    pos++;
+                }
                 break;
             }
-            if (*pos == '\n' && *(pos + 1) == '\n') {
-                pos++;
-                break;
-            }
+
             if (blockLen < (int)sizeof(block) - 1) {
                 block[blockLen++] = *pos;
             }
             pos++;
         }
-        
-        if (blockLen > 10) {
-            block[blockLen] = '\0';
-            
-            // 创建新条目
+
+        if (blockLen > 0) {
             UEFI_BOOT_ENTRY* entry = (UEFI_BOOT_ENTRY*)calloc(1, sizeof(UEFI_BOOT_ENTRY));
-            if (entry) {
-                ParseBcdEntry(block, entry);
-                
-                if (wcslen(entry->name) > 0) {
-                    // 添加到链表
-                    if (!list->entries) {
-                        list->entries = entry;
-                    } else {
-                        tail->next = entry;
-                    }
-                    tail = entry;
-                    list->count++;
+            if (entry && ParseBcdEntry(block, entry, source)) {
+                if (!list->entries) {
+                    list->entries = entry;
                 } else {
-                    free(entry);
+                    tail->next = entry;
                 }
+                tail = entry;
+                list->count++;
+            } else if (entry) {
+                free(entry);
             }
         }
     }
-    
-    // 如果没有找到条目，创建一些示例数据
-    if (list->count == 0) {
-        // 尝试 bcdedit /enum (不带 firmware)
-        ZeroMemory(output, sizeof(output));
-        if (ExecuteCommand(L"bcdedit /enum", output, sizeof(output))) {
-            pos = output;
-            while (*pos) {
-                blockLen = 0;
-                while (*pos) {
-                    if (*pos == '\r' && *(pos + 1) == '\n' && *(pos + 2) == '\r') {
-                        pos += 2;
-                        break;
-                    }
-                    if (blockLen < (int)sizeof(block) - 1) {
-                        block[blockLen++] = *pos;
-                    }
-                    pos++;
+
+    return TRUE;
+}
+
+static void DeduplicateEntriesByGuid(UEFI_BOOT_LIST* list) {
+    UEFI_BOOT_ENTRY* current;
+
+    if (!list) return;
+
+    current = list->entries;
+    while (current) {
+        UEFI_BOOT_ENTRY* prev = current;
+        UEFI_BOOT_ENTRY* check = current->next;
+
+        while (check) {
+            if (wcslen(current->guid) > 0 && _wcsicmp(current->guid, check->guid) == 0) {
+                UEFI_BOOT_ENTRY* duplicate = check;
+                prev->next = check->next;
+                if (duplicate->isFirmwareRegistered) {
+                    current->isFirmwareRegistered = TRUE;
                 }
-                
-                if (blockLen > 10) {
-                    block[blockLen] = '\0';
-                    
-                    UEFI_BOOT_ENTRY* entry = (UEFI_BOOT_ENTRY*)calloc(1, sizeof(UEFI_BOOT_ENTRY));
-                    if (entry) {
-                        ParseBcdEntry(block, entry);
-                        
-                        if (wcslen(entry->name) > 0) {
-                            if (!list->entries) {
-                                list->entries = entry;
-                            } else {
-                                tail->next = entry;
-                            }
-                            tail = entry;
-                            list->count++;
-                        } else {
-                            free(entry);
-                        }
-                    }
+                check = prev->next;
+                free(duplicate);
+                if (list->count > 0) {
+                    list->count--;
                 }
+                continue;
             }
+
+            prev = check;
+            check = check->next;
         }
+
+        current = current->next;
     }
-    
+}
+
+// 扫描所有启动项
+UEFI_BOOT_LIST* UefiScanBootEntries(void) {
+    CHAR output[65536] = {0};
+    UEFI_BOOT_LIST* list = (UEFI_BOOT_LIST*)calloc(1, sizeof(UEFI_BOOT_LIST));
+
+    if (!list) return NULL;
+
+    if (ExecuteCommand(L"bcdedit /enum firmware", output, sizeof(output))) {
+        AddBcdEntries(list, output, ENTRY_SOURCE_FIRMWARE);
+    }
+
+    ZeroMemory(output, sizeof(output));
+    if (ExecuteCommand(L"bcdedit /enum BOOTAPP", output, sizeof(output))) {
+        AddBcdEntries(list, output, ENTRY_SOURCE_BOOTAPP);
+    }
+
+    DeduplicateEntriesByGuid(list);
+
     return list;
 }
 
@@ -485,20 +493,7 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
 
     // 解析返回 GUID: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
     WCHAR guid[64] = {0};
-    CHAR* guidStart = strchr(output, '{');
-    if (guidStart) {
-        CHAR* guidEnd = strchr(guidStart, '}');
-        if (guidEnd) {
-            char guidA[64] = {0};
-            size_t len = guidEnd - guidStart + 1;
-            if (len < sizeof(guidA)) {
-                memcpy(guidA, guidStart, len);
-                MultiByteToWideChar(CP_UTF8, 0, guidA, -1, guid, 64);
-            }
-        }
-    }
-
-    if (wcslen(guid) == 0) {
+    if (!ExtractGuidFromOutput(output, guid, 64)) {
         OutputDebugStringW(L"[DEBUG] failed to parse GUID from bcdedit output\n");
         return FALSE;
     }
@@ -533,11 +528,14 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     OutputDebugStringW(debugMsg);
 
     if (!result) {
+        WCHAR fwError[1024];
+        swprintf(fwError, 1024, L"[ERROR] Failed to register %s into {fwbootmgr} displayorder. bcdedit output: %S\n", guid, output);
+        OutputDebugStringW(fwError);
         CleanupBootEntryByGuid(guid);
         return FALSE;
     }
 
-    if (newId) *newId = 1;
+    if (newId) *newId = ComputeEntryIdFromGuid(guid);
     return TRUE;
 }
 
