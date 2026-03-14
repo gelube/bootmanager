@@ -229,14 +229,28 @@ static BOOL CheckEfiFolder(const WCHAR* rootPath)
 // ============================================
 // 获取卷所属磁盘编号
 // ============================================
-INT GetVolumeDiskNumber(const WCHAR* volumeName)
+static INT GetVolumeDiskNumber(const WCHAR* volumeName)
 {
     if (!volumeName || volumeName[0] == L'\0') {
         return -1;
     }
 
+    // FindFirstVolumeW 返回的路径带末尾反斜杠，CreateFileW 需要去掉它。
+    WCHAR volumePath[MAX_PATH];
+    size_t len = wcslen(volumeName);
+    if (len >= MAX_PATH) {
+        return -1;
+    }
+
+    wcsncpy(volumePath, volumeName, MAX_PATH - 1);
+    volumePath[MAX_PATH - 1] = L'\0';
+
+    if (len > 0 && volumePath[len - 1] == L'\\') {
+        volumePath[len - 1] = L'\0';
+    }
+
     HANDLE hVolume = CreateFileW(
-        volumeName,
+        volumePath,
         0,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         NULL,
@@ -298,9 +312,23 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
         WCHAR pathNames[MAX_PATH] = {0};
         DWORD pathNamesLen = 0;
         BOOL hasDriveLetter = GetVolumePathNamesForVolumeNameW(volumeName, pathNames, MAX_PATH, &pathNamesLen);
+#ifdef _DEBUG
+        {
+            WCHAR debugMsg[256];
+            swprintf(debugMsg, 256, L"[ESP] GetVolumePathNamesForVolumeNameW(%s) => %d\n", volumeName, (INT)hasDriveLetter);
+            OutputDebugStringW(debugMsg);
+        }
+#endif
 
         // 仅保留属于选中磁盘的卷
         INT volDiskNum = GetVolumeDiskNumber(volumeName);
+#ifdef _DEBUG
+        {
+            WCHAR debugMsg[256];
+            swprintf(debugMsg, 256, L"[ESP] GetVolumeDiskNumber(%s) => %d\n", volumeName, volDiskNum);
+            OutputDebugStringW(debugMsg);
+        }
+#endif
         if (volDiskNum < 0 || volDiskNum != diskNumber) {
             continue;
         }
@@ -308,7 +336,15 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
         // 获取文件系统
         WCHAR fsName[32] = {0};
         WCHAR volumeLabel[128] = {0};
-        if (!GetVolumeInformationW(volumeName, volumeLabel, 128, NULL, NULL, NULL, fsName, 32)) {
+        BOOL gotVolumeInfo = GetVolumeInformationW(volumeName, volumeLabel, 128, NULL, NULL, NULL, fsName, 32);
+#ifdef _DEBUG
+        {
+            WCHAR debugMsg[256];
+            swprintf(debugMsg, 256, L"[ESP] GetVolumeInformationW(%s) => %d, fs=%s\n", volumeName, (INT)gotVolumeInfo, fsName);
+            OutputDebugStringW(debugMsg);
+        }
+#endif
+        if (!gotVolumeInfo) {
             continue;
         }
 

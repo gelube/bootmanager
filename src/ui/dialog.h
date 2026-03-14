@@ -58,7 +58,6 @@ BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath);
 // 辅助函数
 INT EnumPhysicalDisks(DISK_INFO** disks);
 INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions);
-INT GetVolumeDiskNumber(const WCHAR* volumeName);
 VOID FreeDiskList(DISK_INFO* disks, INT count);
 VOID FreePartitionList(PARTITION_INFO* partitions, INT count);
 
