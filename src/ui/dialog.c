@@ -320,6 +320,7 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
         // 检查 EFI 文件夹
         BOOL hasEfi = FALSE;
         WCHAR driveLetter = L'\0';
+        BOOL isMountedTemporarily = FALSE;
 
         if (hasDriveLetter && pathNames[0] != L'\0' && pathNames[0] != L'\\') {
             // 有盘符，直接检查
@@ -327,34 +328,65 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
             WCHAR rootPath[8] = {driveLetter, L':', L'\\', 0};
             hasEfi = CheckEfiFolder(rootPath);
         } else {
-            // 没有盘符，临时挂载
+            // 没有盘符，尝试临时挂载
             for (WCHAR d = L'Z'; d >= L'C'; d--) {
                 WCHAR testPath[4] = {d, L':', L'\\', 0};
                 if (GetDriveTypeW(testPath) == DRIVE_NO_ROOT_DIR) {
                     if (TempMountVolume(volumeName, d)) {
                         driveLetter = d;
+                        isMountedTemporarily = TRUE;
                         WCHAR rootPath[8] = {d, L':', L'\\', 0};
                         hasEfi = CheckEfiFolder(rootPath);
                         TempUnmountVolume(d);
+                        // 即使卸载了，只要找到 EFI 就保留 driveLetter 用于显示
+                        break;
                     }
-                    break;
+                }
+            }
+
+            // 如果临时挂载失败，尝试直接使用 Volume GUID 路径检查
+            if (!hasEfi && !isMountedTemporarily) {
+                WCHAR efiPath[MAX_PATH];
+                swprintf(efiPath, MAX_PATH, L"%sEFI", volumeName);
+                DWORD attr = GetFileAttributesW(efiPath);
+                if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+                    hasEfi = TRUE;
+                    driveLetter = L'\0';
                 }
             }
         }
 
-        // 如果找到 EFI 文件夹，添加到列表
-        if (hasEfi && driveLetter != L'\0') {
+        // 如果找到 EFI 文件夹，添加到列表（即使没有盘符）
+        if (hasEfi && count < maxPartitions) {
             (*partitions)[count].driveLetter = driveLetter;
             wcsncpy((*partitions)[count].fileSystem, fsName, 32);
             (*partitions)[count].isESP = TRUE;
 
             // 构建显示名称
-            if (wcslen(volumeLabel) > 0) {
-                swprintf((*partitions)[count].label, 128,
-                    L"ESP 分区 - %s (%s) [%c:]", fsName, volumeLabel, driveLetter);
+            if (driveLetter != L'\0') {
+                if (wcslen(volumeLabel) > 0) {
+                    swprintf((*partitions)[count].label, 128,
+                        L"ESP 分区 - %s (%s) [%c:]", fsName, volumeLabel, driveLetter);
+                } else {
+                    swprintf((*partitions)[count].label, 128,
+                        L"ESP 分区 - %s [%c:]", fsName, driveLetter);
+                }
             } else {
-                swprintf((*partitions)[count].label, 128,
-                    L"ESP 分区 - %s [%c:]", fsName, driveLetter);
+                WCHAR guidShort[64] = {0};
+                const WCHAR* start = wcsstr(volumeName, L"{");
+                if (start) {
+                    wcsncpy(guidShort, start, 63);
+                    WCHAR* end = wcschr(guidShort, L'}');
+                    if (end) *(end + 1) = L'\0';
+                }
+
+                if (wcslen(volumeLabel) > 0) {
+                    swprintf((*partitions)[count].label, 128,
+                        L"ESP 分区 - %s (%s) (未挂载) %s", fsName, volumeLabel, guidShort);
+                } else {
+                    swprintf((*partitions)[count].label, 128,
+                        L"ESP 分区 - %s (未挂载) %s", fsName, guidShort);
+                }
             }
 
             count++;
