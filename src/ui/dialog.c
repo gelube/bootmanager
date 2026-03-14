@@ -401,31 +401,13 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
             wcsncpy((*partitions)[count].fileSystem, fsName, 32);
             (*partitions)[count].isESP = TRUE;
 
-            // 构建显示名称
-            if (driveLetter != L'\0') {
-                if (wcslen(volumeLabel) > 0) {
-                    swprintf((*partitions)[count].label, 128,
-                        L"ESP 分区 - %s (%s) [%c:]", fsName, volumeLabel, driveLetter);
-                } else {
-                    swprintf((*partitions)[count].label, 128,
-                        L"ESP 分区 - %s [%c:]", fsName, driveLetter);
-                }
+            // 构建显示名称 - 简化版
+            if (wcslen(volumeLabel) > 0) {
+                swprintf((*partitions)[count].label, 128,
+                    L"ESP 分区 - %s (%s)", fsName, volumeLabel);
             } else {
-                WCHAR guidShort[64] = {0};
-                const WCHAR* start = wcsstr(volumeName, L"{");
-                if (start) {
-                    wcsncpy(guidShort, start, 63);
-                    WCHAR* end = wcschr(guidShort, L'}');
-                    if (end) *(end + 1) = L'\0';
-                }
-
-                if (wcslen(volumeLabel) > 0) {
-                    swprintf((*partitions)[count].label, 128,
-                        L"ESP 分区 - %s (%s) (未挂载) %s", fsName, volumeLabel, guidShort);
-                } else {
-                    swprintf((*partitions)[count].label, 128,
-                        L"ESP 分区 - %s (未挂载) %s", fsName, guidShort);
-                }
+                swprintf((*partitions)[count].label, 128,
+                    L"ESP 分区 - %s", fsName);
             }
 
             count++;
@@ -575,6 +557,20 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
                     MessageBoxW(hDlg, L"请输入启动文件路径", L"提示", MB_OK | MB_ICONWARNING);
                     SetFocus(GetDlgItem(hDlg, IDC_EDIT_PATH));
                     return 0;
+                }
+
+                // 选中分区有盘符且输入相对 EFI 路径时，补全为绝对路径，便于后续推导 device/path
+                if (data->selectedPartition >= 0 && data->partitions &&
+                    data->selectedPartition < data->partitionCount &&
+                    data->partitions[data->selectedPartition].driveLetter >= L'A' &&
+                    data->partitions[data->selectedPartition].driveLetter <= L'Z' &&
+                    data->filePath[0] == L'\\') {
+                    WCHAR fullPath[512] = {0};
+                    swprintf(fullPath, 512, L"%c:%s",
+                        data->partitions[data->selectedPartition].driveLetter,
+                        data->filePath);
+                    wcsncpy(data->filePath, fullPath, 511);
+                    data->filePath[511] = L'\0';
                 }
 
                 PostMessageW(hDlg, WM_APP + 1, IDOK, 0);

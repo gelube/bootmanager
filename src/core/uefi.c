@@ -377,20 +377,38 @@ BOOL UefiSetBootOrder(const DWORD* bootOrder, DWORD count) {
 // 添加启动项
 BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* filePath, DWORD* newId) {
     WCHAR cmd[2048];
-    
-    if (!name) return FALSE;
-    
-    // 使用 bcdedit 创建新条目
-    // bcdedit /create /d "名称" /application bootsector
-    swprintf(cmd, 2048, L"bcdedit /create /d \"%s\" /application bootsector", name);
-    
+    WCHAR normalizedDevice[256] = {0};
+    WCHAR normalizedPath[512] = {0};
+
+    if (!name || wcslen(name) == 0) return FALSE;
+
+    if (devicePath && wcslen(devicePath) > 0) {
+        wcsncpy(normalizedDevice, devicePath, 255);
+        normalizedDevice[255] = L'\0';
+    }
+
+    if (filePath && wcslen(filePath) > 0) {
+        // 支持传入 X:\EFI\xxx.efi，自动拆分成 device + path
+        if (filePath[0] >= L'A' && filePath[0] <= L'Z' && filePath[1] == L':' && filePath[2] == L'\\') {
+            if (wcslen(normalizedDevice) == 0) {
+                swprintf(normalizedDevice, 256, L"partition=%c:", filePath[0]);
+            }
+            swprintf(normalizedPath, 512, L"\\%s", filePath + 3);
+        } else {
+            wcsncpy(normalizedPath, filePath, 511);
+            normalizedPath[511] = L'\0';
+        }
+    }
+
+    // EFI 程序应使用 BOOTAPP 类型
+    swprintf(cmd, 2048, L"bcdedit /create /d \"%s\" /application BOOTAPP", name);
+
     CHAR output[4096] = {0};
     if (!ExecuteCommand(cmd, output, sizeof(output))) {
         return FALSE;
     }
-    
-    // 解析返回的 GUID
-    // {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
+
+    // 解析返回 GUID: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
     WCHAR guid[64] = {0};
     CHAR* guidStart = strchr(output, '{');
     if (guidStart) {
@@ -404,22 +422,30 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
             }
         }
     }
-    
+
     if (wcslen(guid) == 0) {
         return FALSE;
     }
-    
-    // 设置 device 和 path
-    if (devicePath && wcslen(devicePath) > 0) {
-        swprintf(cmd, 2048, L"bcdedit /set %s device %s", guid, devicePath);
-        ExecuteCommand(cmd, output, sizeof(output));
+
+    // device/path 需同时正确设置，否则条目不会生效
+    if (wcslen(normalizedDevice) > 0) {
+        swprintf(cmd, 2048, L"bcdedit /set %s device %s", guid, normalizedDevice);
+        if (!ExecuteCommand(cmd, output, sizeof(output))) {
+            return FALSE;
+        }
     }
-    
-    if (filePath && wcslen(filePath) > 0) {
-        swprintf(cmd, 2048, L"bcdedit /set %s path %s", guid, filePath);
-        ExecuteCommand(cmd, output, sizeof(output));
+
+    if (wcslen(normalizedPath) > 0) {
+        swprintf(cmd, 2048, L"bcdedit /set %s path \"%s\"", guid, normalizedPath);
+        if (!ExecuteCommand(cmd, output, sizeof(output))) {
+            return FALSE;
+        }
     }
-    
+
+    // 将新条目加入 firmware displayorder，保证在列表中可见
+    swprintf(cmd, 2048, L"bcdedit /set {fwbootmgr} displayorder %s /addlast", guid);
+    ExecuteCommand(cmd, output, sizeof(output));
+
     if (newId) *newId = 1;
     return TRUE;
 }

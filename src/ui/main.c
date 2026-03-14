@@ -343,7 +343,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             SetStatus(L"⏳ 正在添加启动项...");
 
             DWORD newId = 0;
-            if (UefiAddBootEntry(title, L"", path, &newId)) {
+            if (UefiAddBootEntry(title, NULL, path, &newId)) {
                 MessageBoxW(hWnd, L"启动项添加成功", L"完成", MB_OK | MB_ICONINFORMATION);
                 SetStatus(L"✓ 启动项已添加");
                 RefreshBootList();
@@ -928,8 +928,19 @@ static void RefreshBootList(void)
     ListView_DeleteAllItems(g_hListView);
     
     if (g_bootList) UefiFreeBootList(g_bootList);
+    g_bootList = NULL;
+
+    // 每次刷新都重新扫描固件启动项，避免外部工具修改后仍显示旧缓存
     g_bootList = UefiScanBootEntries();
-    
+    if (!g_bootList || g_bootList->count == 0) {
+        if (g_bootList) {
+            UefiFreeBootList(g_bootList);
+            g_bootList = NULL;
+        }
+        Sleep(120);
+        g_bootList = UefiScanBootEntries();
+    }
+
     if (!g_bootList || g_bootList->count == 0) {
         LVITEM lvi = {0}; lvi.mask = LVIF_TEXT;
         lvi.pszText = L"0001"; lvi.iItem = 0;
