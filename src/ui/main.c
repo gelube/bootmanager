@@ -11,6 +11,7 @@
 #include <shlobj.h>
 #include <wchar.h>
 #include <stdio.h>
+#include "dialogs/add_efi_dialog.h"
 #include "../core/uefi.h"
 #include "../core/refind.h"
 #include "../core/backup.h"

@@ -4,6 +4,9 @@
  */
 
 #include "refind.h"
+#include "../../include/esp.h"
+#include "../../include/error.h"
+#include "../../include/logger.h"
 #include "uefi.h"
 #include <wchar.h>
 #include <shlobj.h>
@@ -206,47 +209,20 @@ BOOL RefindIsInstalled(const WCHAR* espDrive)
 // ============================================
 BOOL RefindMountESP(WCHAR* driveLetter, DWORD size)
 {
+    BOOTMGR_ERROR error = {0};
+
     if (!driveLetter || size < 3) {
         return FALSE;
     }
 
-    WCHAR availableDrive = 0;
-    for (WCHAR d = L'Z'; d >= L'C'; d--) {
-        WCHAR root[4] = {d, L':', L'\\', 0};
-        if (GetDriveTypeW(root) == DRIVE_NO_ROOT_DIR) {
-            availableDrive = d;
-            break;
-        }
-    }
-
-    if (availableDrive == 0) {
-        RefindSetError(L"没有可用盘符用于挂载 ESP");
+    if (!EspMount(driveLetter, size)) {
+        BootMgrSetError(&error, BOOTMGR_ERROR_ESP_MOUNT_FAILED, L"mountvol /S 挂载 ESP 失败", GetLastError());
+        RefindSetError(BootMgrGetErrorMessage(&error));
+        LOG_ERROR(L"RefindMountESP failed: %s", BootMgrGetErrorMessage(&error));
         return FALSE;
     }
 
-    WCHAR cmd[64];
-    swprintf(cmd, 64, L"/c mountvol %c: /S", availableDrive);
-    RefindDebugLog(L"Mount ESP command: %s", cmd);
-
-    if (!RunCommand(L"cmd.exe", cmd)) {
-        RefindSetError(L"mountvol /S 挂载 ESP 失败");
-        return FALSE;
-    }
-
-    WCHAR root[4] = {availableDrive, L':', L'\\', 0};
-    if (GetDriveTypeW(root) == DRIVE_NO_ROOT_DIR) {
-        RefindSetError(L"挂载后盘符不可访问: %c:", availableDrive);
-        return FALSE;
-    }
-
-    WCHAR efiPath[MAX_PATH];
-    swprintf(efiPath, MAX_PATH, L"%c:\\EFI", availableDrive);
-    if (GetFileAttributesW(efiPath) == INVALID_FILE_ATTRIBUTES) {
-        RefindSetError(L"挂载后未找到 EFI 目录: %c:", availableDrive);
-        return FALSE;
-    }
-
-    swprintf(driveLetter, size, L"%c:", availableDrive);
+    LOG_INFO(L"ESP mounted at %s", driveLetter);
     RefindDebugLog(L"ESP mounted at %s", driveLetter);
     return TRUE;
 }
@@ -257,21 +233,13 @@ BOOL RefindUnmountESP(const WCHAR* driveLetter)
         return FALSE;
     }
 
-    WCHAR cmd[64];
-    swprintf(cmd, 64, L"/c mountvol %c: /D", driveLetter[0]);
-    RefindDebugLog(L"Unmount ESP command: %s", cmd);
-
-    if (!RunCommand(L"cmd.exe", cmd)) {
+    if (!EspUnmount(driveLetter)) {
         RefindSetError(L"mountvol /D 卸载 ESP 失败: %c:", driveLetter[0]);
+        LOG_ERROR(L"RefindUnmountESP failed for %c:", driveLetter[0]);
         return FALSE;
     }
 
-    WCHAR root[4] = {driveLetter[0], L':', L'\\', 0};
-    if (GetDriveTypeW(root) != DRIVE_NO_ROOT_DIR) {
-        RefindSetError(L"ESP 卸载后盘符仍可访问: %c:", driveLetter[0]);
-        return FALSE;
-    }
-
+    LOG_INFO(L"ESP unmounted from %c:", driveLetter[0]);
     RefindDebugLog(L"ESP unmounted from %c:", driveLetter[0]);
     return TRUE;
 }

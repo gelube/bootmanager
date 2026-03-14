@@ -21,7 +21,10 @@ echo [INFO] Compiling Boot Manager Pro v3...
 echo.
 
 :: Compile
-gcc -municode src\ui\main.c src\ui\dialog.c src\core\*.c -o dist\BootManagerPro.exe ^
+gcc -municode src\ui\main.c src\ui\dialog.c src\ui\pages\*.c src\ui\dialogs\*.c ^
+    src\core\*.c src\hal\*.c src\utils\*.c ^
+    -I include ^
+    -o dist\BootManagerPro.exe ^
     -m64 -mwindows -lcomctl32 -lshell32 -ladvapi32 -lole32 -luuid -O2 -Wall
 
 if %errorlevel% neq 0 (
