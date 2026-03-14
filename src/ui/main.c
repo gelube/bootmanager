@@ -335,6 +335,13 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;  // 用户取消
             }
 
+            // 调试：显示用户输入
+            {
+                WCHAR debugMsg[1024];
+                swprintf(debugMsg, 1024, L"Title: %s\nPath: %s", title, path);
+                MessageBoxW(hWnd, debugMsg, L"调试", MB_OK);
+            }
+
             if (wcslen(title) == 0 || wcslen(path) == 0) {
                 MessageBoxW(hWnd, L"请输入完整信息", L"提示", MB_OK | MB_ICONWARNING);
                 break;

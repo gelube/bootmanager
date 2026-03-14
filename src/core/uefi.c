@@ -106,7 +106,7 @@ static BOOL ExecuteCommand(const WCHAR* cmd, CHAR* output, DWORD outputSize) {
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     
-    return TRUE;
+    return (exitCode == 0);
 }
 
 // 解析单个 BCD 条目
@@ -380,7 +380,18 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     WCHAR normalizedDevice[256] = {0};
     WCHAR normalizedPath[512] = {0};
 
+    OutputDebugStringW(L"[DEBUG] UefiAddBootEntry called\n");
+    OutputDebugStringW(name ? name : L"(null)");
+    OutputDebugStringW(L"\n");
+    OutputDebugStringW(filePath ? filePath : L"(null)");
+    OutputDebugStringW(L"\n");
+
     if (!name || wcslen(name) == 0) return FALSE;
+
+    if (!UefiIsAdmin()) {
+        OutputDebugStringW(L"[DEBUG] UefiAddBootEntry aborted: not running as admin\n");
+        return FALSE;
+    }
 
     if (devicePath && wcslen(devicePath) > 0) {
         wcsncpy(normalizedDevice, devicePath, 255);
@@ -393,7 +404,15 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
             if (wcslen(normalizedDevice) == 0) {
                 swprintf(normalizedDevice, 256, L"partition=%c:", filePath[0]);
             }
+            // 路径从第 3 个字符开始（跳过 X:\）
             swprintf(normalizedPath, 512, L"\\%s", filePath + 3);
+            
+            // 调试输出
+            OutputDebugStringW(L"[DEBUG] Split path: device=");
+            OutputDebugStringW(normalizedDevice);
+            OutputDebugStringW(L", path=");
+            OutputDebugStringW(normalizedPath);
+            OutputDebugStringW(L"\n");
         } else {
             wcsncpy(normalizedPath, filePath, 511);
             normalizedPath[511] = L'\0';
@@ -404,7 +423,13 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     swprintf(cmd, 2048, L"bcdedit /create /d \"%s\" /application BOOTAPP", name);
 
     CHAR output[4096] = {0};
-    if (!ExecuteCommand(cmd, output, sizeof(output))) {
+    BOOL result = ExecuteCommand(cmd, output, sizeof(output));
+
+    WCHAR debugMsg[512];
+    swprintf(debugMsg, 512, L"[DEBUG] bcdedit /create result=%d, output=%S\n", result, output);
+    OutputDebugStringW(debugMsg);
+
+    if (!result) {
         return FALSE;
     }
 
@@ -424,27 +449,36 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     }
 
     if (wcslen(guid) == 0) {
+        OutputDebugStringW(L"[DEBUG] failed to parse GUID from bcdedit output\n");
         return FALSE;
     }
 
     // device/path 需同时正确设置，否则条目不会生效
     if (wcslen(normalizedDevice) > 0) {
         swprintf(cmd, 2048, L"bcdedit /set %s device %s", guid, normalizedDevice);
-        if (!ExecuteCommand(cmd, output, sizeof(output))) {
+        result = ExecuteCommand(cmd, output, sizeof(output));
+        swprintf(debugMsg, 512, L"[DEBUG] bcdedit /set device result=%d, output=%S\n", result, output);
+        OutputDebugStringW(debugMsg);
+        if (!result) {
             return FALSE;
         }
     }
 
     if (wcslen(normalizedPath) > 0) {
         swprintf(cmd, 2048, L"bcdedit /set %s path \"%s\"", guid, normalizedPath);
-        if (!ExecuteCommand(cmd, output, sizeof(output))) {
+        result = ExecuteCommand(cmd, output, sizeof(output));
+        swprintf(debugMsg, 512, L"[DEBUG] bcdedit /set path result=%d, output=%S\n", result, output);
+        OutputDebugStringW(debugMsg);
+        if (!result) {
             return FALSE;
         }
     }
 
     // 将新条目加入 firmware displayorder，保证在列表中可见
     swprintf(cmd, 2048, L"bcdedit /set {fwbootmgr} displayorder %s /addlast", guid);
-    ExecuteCommand(cmd, output, sizeof(output));
+    result = ExecuteCommand(cmd, output, sizeof(output));
+    swprintf(debugMsg, 512, L"[DEBUG] bcdedit /set displayorder result=%d, output=%S\n", result, output);
+    OutputDebugStringW(debugMsg);
 
     if (newId) *newId = 1;
     return TRUE;
