@@ -36,13 +36,13 @@ echo [SUCCESS] Build completed successfully!
 echo Output: dist\BootManagerPro.exe
 echo.
 
-:: Check for rEFInd source
-echo [INFO] Checking rEFInd source...
-if exist "Z:\refind0.14.2\refind\refind_x64.efi" (
-    echo [OK] rEFInd source found at Z:\refind0.14.2\refind\
+:: Check for bundled rEFInd source
+echo [INFO] Checking bundled rEFInd source...
+if exist ".\refind\refind_x64.efi" (
+    echo [OK] rEFInd source found at .\refind\
 ) else (
-    echo [WARN] rEFInd source not found at Z:\refind0.14.2\refind\
-    echo        Please ensure rEFInd files are available before installing.
+    echo [WARN] rEFInd source not found at .\refind\
+    echo        Please copy rEFInd files into the project refind directory.
 )
 
 echo.

@@ -206,37 +206,12 @@ BOOL RefindIsInstalled(const WCHAR* espDrive)
 // ============================================
 BOOL RefindMountESP(WCHAR* driveLetter, DWORD size)
 {
-    if (!driveLetter || size < 4) return FALSE;
-
-    for (WCHAR d = L'C'; d <= L'Z'; d++) {
-        WCHAR root[4] = {d, L':', L'\\', 0};
-
-        UINT type = GetDriveTypeW(root);
-        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) {
-            continue;
-        }
-
-        WCHAR fsName[64] = {0};
-        if (!GetVolumeInformationW(root, NULL, 0, NULL, NULL, NULL, fsName, 64)) {
-            continue;
-        }
-
-        if (_wcsicmp(fsName, L"FAT32") == 0 || _wcsicmp(fsName, L"FAT") == 0) {
-            WCHAR efiPath[MAX_PATH];
-            swprintf(efiPath, MAX_PATH, L"%s\\EFI", root);
-
-            if (GetFileAttributesW(efiPath) != INVALID_FILE_ATTRIBUTES) {
-                wcsncpy(driveLetter, root, size);
-                driveLetter[size - 1] = L'\0';
-                driveLetter[2] = L'\0';
-                RefindDebugLog(L"ESP already mounted at %s", driveLetter);
-                return TRUE;
-            }
-        }
+    if (!driveLetter || size < 3) {
+        return FALSE;
     }
 
     WCHAR availableDrive = 0;
-    for (WCHAR d = L'S'; d >= L'C'; d--) {
+    for (WCHAR d = L'Z'; d >= L'C'; d--) {
         WCHAR root[4] = {d, L':', L'\\', 0};
         if (GetDriveTypeW(root) == DRIVE_NO_ROOT_DIR) {
             availableDrive = d;
@@ -249,17 +224,25 @@ BOOL RefindMountESP(WCHAR* driveLetter, DWORD size)
         return FALSE;
     }
 
-    WCHAR cmd[MAX_PATH];
-    swprintf(cmd, MAX_PATH, L"/c mountvol %c: /S", availableDrive);
+    WCHAR cmd[64];
+    swprintf(cmd, 64, L"/c mountvol %c: /S", availableDrive);
+    RefindDebugLog(L"Mount ESP command: %s", cmd);
 
     if (!RunCommand(L"cmd.exe", cmd)) {
-        RefindSetError(L"mountvol 挂载失败");
+        RefindSetError(L"mountvol /S 挂载 ESP 失败");
         return FALSE;
     }
 
     WCHAR root[4] = {availableDrive, L':', L'\\', 0};
     if (GetDriveTypeW(root) == DRIVE_NO_ROOT_DIR) {
-        RefindSetError(L"挂载后盘符仍不可访问: %c:", availableDrive);
+        RefindSetError(L"挂载后盘符不可访问: %c:", availableDrive);
+        return FALSE;
+    }
+
+    WCHAR efiPath[MAX_PATH];
+    swprintf(efiPath, MAX_PATH, L"%c:\\EFI", availableDrive);
+    if (GetFileAttributesW(efiPath) == INVALID_FILE_ATTRIBUTES) {
+        RefindSetError(L"挂载后未找到 EFI 目录: %c:", availableDrive);
         return FALSE;
     }
 
@@ -274,9 +257,23 @@ BOOL RefindUnmountESP(const WCHAR* driveLetter)
         return FALSE;
     }
 
-    WCHAR cmd[MAX_PATH];
-    swprintf(cmd, MAX_PATH, L"/c mountvol %s /D", driveLetter);
-    return RunCommand(L"cmd.exe", cmd);
+    WCHAR cmd[64];
+    swprintf(cmd, 64, L"/c mountvol %c: /D", driveLetter[0]);
+    RefindDebugLog(L"Unmount ESP command: %s", cmd);
+
+    if (!RunCommand(L"cmd.exe", cmd)) {
+        RefindSetError(L"mountvol /D 卸载 ESP 失败: %c:", driveLetter[0]);
+        return FALSE;
+    }
+
+    WCHAR root[4] = {driveLetter[0], L':', L'\\', 0};
+    if (GetDriveTypeW(root) != DRIVE_NO_ROOT_DIR) {
+        RefindSetError(L"ESP 卸载后盘符仍可访问: %c:", driveLetter[0]);
+        return FALSE;
+    }
+
+    RefindDebugLog(L"ESP unmounted from %c:", driveLetter[0]);
+    return TRUE;
 }
 
 // ============================================
@@ -328,44 +325,49 @@ BOOL RefindRemoveNVRAMEntry(const WCHAR* description)
 // ============================================
 BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
 {
-    WCHAR actualEsp[MAX_PATH] = {0};
-    const WCHAR* targetEsp = espDrive;
-    WCHAR srcEfi[MAX_PATH];
+    WCHAR actualEsp[4] = {0};
+    const WCHAR* targetEsp = actualEsp;
+    WCHAR sourceRoot[MAX_PATH];
+    WCHAR srcFile[MAX_PATH];
 
     g_refindLastError[0] = L'\0';
+
+    (void)espDrive;
 
     if (!sourcePath || wcslen(sourcePath) == 0) {
         RefindSetError(L"sourcePath 为空");
         return FALSE;
     }
 
-    if (!espDrive || wcslen(espDrive) == 0) {
-        if (!RefindMountESP(actualEsp, MAX_PATH)) {
-            RefindSetError(L"自动挂载 ESP 失败");
-            return FALSE;
-        }
-        targetEsp = actualEsp;
-    }
-
-    RefindShowStep(L"rEFInd 调试", L"步骤1: 已准备 ESP 分区");
-    RefindDebugLog(L"ESP Drive: %s", targetEsp);
-
-    swprintf(srcEfi, MAX_PATH, L"%s\\refind_x64.efi", sourcePath);
-    if (GetFileAttributesW(srcEfi) == INVALID_FILE_ATTRIBUTES) {
-        swprintf(srcEfi, MAX_PATH, L"%s\\refind\\refind_x64.efi", sourcePath);
-        if (GetFileAttributesW(srcEfi) == INVALID_FILE_ATTRIBUTES) {
-            WCHAR msg[MAX_PATH + 64];
-            swprintf(msg, MAX_PATH + 64, L"步骤2失败: 源文件不存在\n%s", sourcePath);
-            RefindShowStep(L"rEFInd 调试", msg);
-            RefindSetError(L"未找到 refind_x64.efi，源路径: %s", sourcePath);
-            return FALSE;
-        }
+    if (!RefindMountESP(actualEsp, 4)) {
+        RefindSetError(L"挂载 ESP 分区失败");
+        return FALSE;
     }
 
     {
-        WCHAR msg[MAX_PATH + 64];
-        swprintf(msg, MAX_PATH + 64, L"步骤2: 源文件验证成功\n%s", srcEfi);
-        RefindShowStep(L"rEFInd 调试", msg);
+        WCHAR mountDrive[64];
+        swprintf(mountDrive, 64, L"ESP 分区挂载成功:\n%s", targetEsp);
+        RefindShowStep(L"挂载 ESP", mountDrive);
+    }
+
+    swprintf(sourceRoot, MAX_PATH, L"%s", sourcePath);
+    swprintf(srcFile, MAX_PATH, L"%s\\refind_x64.efi", sourceRoot);
+
+    if (GetFileAttributesW(srcFile) == INVALID_FILE_ATTRIBUTES) {
+        swprintf(sourceRoot, MAX_PATH, L"%s\\refind", sourcePath);
+        swprintf(srcFile, MAX_PATH, L"%s\\refind_x64.efi", sourceRoot);
+    }
+
+    {
+        WCHAR srcCheck[MAX_PATH];
+        swprintf(srcCheck, MAX_PATH, L"源文件路径:\n%s\\refind_x64.efi", sourceRoot);
+        RefindShowStep(L"验证源文件", srcCheck);
+    }
+
+    if (GetFileAttributesW(srcFile) == INVALID_FILE_ATTRIBUTES) {
+        RefindShowStep(L"错误", L"源文件不存在!");
+        RefindSetError(L"未找到 refind_x64.efi，源路径: %s", sourcePath);
+        return FALSE;
     }
 
     WCHAR destRefindDir[MAX_PATH];
@@ -373,6 +375,7 @@ BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
     WCHAR backupPath[MAX_PATH];
     WCHAR bootxEfi[MAX_PATH];
     WCHAR refindEfi[MAX_PATH];
+    WCHAR destFile[MAX_PATH];
 
     swprintf(destRefindDir, MAX_PATH, L"%s\\EFI\\refind", targetEsp);
     swprintf(destBootDir, MAX_PATH, L"%s\\EFI\\Boot", targetEsp);
@@ -392,36 +395,48 @@ BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
             RefindSetError(L"备份 bootx64.efi 失败");
             return FALSE;
         }
-        RefindShowStep(L"rEFInd 调试", L"步骤3: 已备份原始 bootx64.efi");
+        RefindShowStep(L"备份引导文件", L"已备份原始 EFI\\Boot\\bootx64.efi");
     }
 
-    if (!CopyDirectoryContents(sourcePath, destRefindDir)) {
-        WCHAR altSrc[MAX_PATH];
-        swprintf(altSrc, MAX_PATH, L"%s\\refind", sourcePath);
-        if (!CopyDirectoryContents(altSrc, destRefindDir)) {
-            RefindShowStep(L"rEFInd 调试", L"步骤4失败: 复制 rEFInd 目录失败");
-            RefindSetError(L"复制 rEFInd 文件失败");
-            return FALSE;
-        }
+    swprintf(destFile, MAX_PATH, L"%s\\refind_x64.efi", destRefindDir);
+    {
+        WCHAR copyMsg[MAX_PATH * 2];
+        swprintf(copyMsg, MAX_PATH * 2, L"从:\n%s\n到:\n%s", srcFile, destFile);
+        RefindShowStep(L"复制文件", copyMsg);
     }
-    RefindShowStep(L"rEFInd 调试", L"步骤4: 文件复制成功");
+
+    if (!CopyDirectoryContents(sourceRoot, destRefindDir)) {
+        DWORD err = GetLastError();
+        WCHAR errMsg[256];
+        swprintf(errMsg, 256, L"复制失败!\n错误代码：%lu", err);
+        RefindShowStep(L"错误", errMsg);
+        RefindSetError(L"复制 rEFInd 文件失败，错误代码: %lu", err);
+        return FALSE;
+    }
+
+    if (GetFileAttributesW(destFile) == INVALID_FILE_ATTRIBUTES) {
+        RefindShowStep(L"错误", L"目标文件不存在!复制失败");
+        RefindSetError(L"复制后目标文件缺失: %s", destFile);
+        return FALSE;
+    }
+    RefindShowStep(L"成功", L"文件复制成功");
 
     swprintf(refindEfi, MAX_PATH, L"%s\\refind_x64.efi", destRefindDir);
     if (!CopyFileW(refindEfi, bootxEfi, FALSE)) {
         DeleteFileW(bootxEfi);
         if (!CopyFileW(refindEfi, bootxEfi, FALSE)) {
-            RefindShowStep(L"rEFInd 调试", L"步骤5失败: 无法写入 EFI\\Boot\\bootx64.efi");
+            RefindShowStep(L"错误", L"无法写入 EFI\\Boot\\bootx64.efi");
             RefindSetError(L"复制 refind_x64.efi 到 bootx64.efi 失败");
             return FALSE;
         }
     }
 
     if (!RefindAddNVRAMEntry(L"rEFInd Boot Manager", L"\\EFI\\refind\\refind_x64.efi")) {
-        RefindShowStep(L"rEFInd 调试", L"步骤6失败: NVRAM 启动项注册失败");
+        RefindShowStep(L"错误", L"NVRAM 启动项注册失败");
         return FALSE;
     }
 
-    RefindShowStep(L"rEFInd 调试", L"步骤6: NVRAM 启动项注册成功");
+    RefindShowStep(L"成功", L"NVRAM 启动项注册成功");
     return TRUE;
 }
 
@@ -430,19 +445,18 @@ BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
 // ============================================
 BOOL RefindUninstall(const WCHAR* espDrive)
 {
-    WCHAR actualEsp[MAX_PATH] = {0};
-    const WCHAR* targetEsp = espDrive;
+    WCHAR actualEsp[4] = {0};
+    const WCHAR* targetEsp = actualEsp;
 
     g_refindLastError[0] = L'\0';
+    (void)espDrive;
 
-    if (!espDrive || wcslen(espDrive) == 0) {
-        if (!RefindMountESP(actualEsp, MAX_PATH)) {
-            RefindSetError(L"自动挂载 ESP 失败");
-            return FALSE;
-        }
-        targetEsp = actualEsp;
+    if (!RefindMountESP(actualEsp, 4)) {
+        RefindSetError(L"挂载 ESP 分区失败");
+        return FALSE;
     }
 
+    RefindShowStep(L"rEFInd 调试", L"卸载步骤0: ESP 分区挂载成功");
     RefindDebugLog(L"Uninstall from ESP: %s", targetEsp);
 
     WCHAR destBootDir[MAX_PATH];

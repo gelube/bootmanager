@@ -17,6 +17,8 @@
 #include "../core/wimboot.h"
 #include "dialog.h"
 
+#define REFIND_SOURCE_PATH L".\\refind"
+
 // ============================================
 // 亮色主题 - 设计令牌
 // ============================================
@@ -446,16 +448,24 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             UpdateWindow(hWnd);
 
             // 检查源文件
-            if (GetFileAttributesW(L"Z:\\refind0.14.2\\refind\\refind_x64.efi") == INVALID_FILE_ATTRIBUTES) {
+            WCHAR sourceEfiPath[MAX_PATH];
+            swprintf(sourceEfiPath, MAX_PATH, L"%s\\refind_x64.efi", REFIND_SOURCE_PATH);
+            if (GetFileAttributesW(sourceEfiPath) == INVALID_FILE_ATTRIBUTES) {
                 UnmountESP(espDrive[0]);
-                MessageBoxW(hWnd, L"未找到 rEFInd 源文件\n\n路径: Z:\\refind0.14.2\\refind\\refind_x64.efi", L"错误", MB_OK | MB_ICONERROR);
+                WCHAR errMsg[MAX_PATH + 64];
+                swprintf(errMsg, MAX_PATH + 64, L"未找到 rEFInd 源文件\n\n路径: %s", sourceEfiPath);
+                MessageBoxW(hWnd, errMsg, L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 源文件缺失");
                 break;
             }
 
-            MessageBoxW(hWnd, L"源文件路径验证成功:\nZ:\\refind0.14.2\\refind\\refind_x64.efi", L"rEFInd 调试", MB_OK | MB_ICONINFORMATION);
+            {
+                WCHAR okMsg[MAX_PATH + 64];
+                swprintf(okMsg, MAX_PATH + 64, L"源文件路径验证成功:\n%s", sourceEfiPath);
+                MessageBoxW(hWnd, okMsg, L"rEFInd 调试", MB_OK | MB_ICONINFORMATION);
+            }
 
-            BOOL success = RefindInstall(L"Z:\\refind0.14.2\\refind", espDrive);
+            BOOL success = RefindInstall(REFIND_SOURCE_PATH, espDrive);
 
             if (success) {
                 MessageBoxW(hWnd, L"rEFInd 安装成功！\n\n重启后将显示 rEFInd 启动菜单。", L"安装完成", MB_OK | MB_ICONINFORMATION);
@@ -868,7 +878,7 @@ static void BuildRefindPage(HWND hParent)
     
     // 提示
     HWND hNote = CreateWindowExW(0, L"STATIC",
-        L"提示: 需要管理员权限 | 源文件: Z:\\refind0.14.2\\refind\\",
+        L"提示: 需要管理员权限 | 源文件: .\\refind\\",
         WS_CHILD | WS_VISIBLE | SS_CENTER,
         CONTENT_PADDING + 50, h - 100, w - 100, 24,
         hParent, NULL, NULL, NULL);
