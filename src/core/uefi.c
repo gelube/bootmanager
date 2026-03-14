@@ -53,60 +53,110 @@ static BOOL ExecuteCommand(const WCHAR* cmd, CHAR* output, DWORD outputSize) {
     SECURITY_ATTRIBUTES sa = {0};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
-    
+
     HANDLE hReadPipe, hWritePipe;
     if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
         return FALSE;
     }
-    
+
+    if (output && outputSize > 0) {
+        output[0] = '\0';
+    }
+
     SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
-    
+
     STARTUPINFOW si = {0};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     si.hStdOutput = hWritePipe;
     si.hStdError = hWritePipe;
     si.wShowWindow = SW_HIDE;
-    
+
     PROCESS_INFORMATION pi = {0};
-    
+
     // 使用 cmd /c 执行命令
     WCHAR fullCmd[2048];
     swprintf(fullCmd, 2048, L"cmd.exe /c %s", cmd);
-    
+
     if (!CreateProcessW(NULL, fullCmd, NULL, NULL, TRUE,
         CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         CloseHandle(hReadPipe);
         CloseHandle(hWritePipe);
         return FALSE;
     }
-    
+
     CloseHandle(hWritePipe);
-    
+
     // 读取输出
     DWORD bytesRead = 0;
     DWORD totalBytes = 0;
     CHAR buffer[4096];
-    
+
     while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-        if (totalBytes + bytesRead < outputSize) {
+        if (output && outputSize > 0 && totalBytes + bytesRead < outputSize) {
             memcpy(output + totalBytes, buffer, bytesRead);
             totalBytes += bytesRead;
         }
     }
-    
-    output[totalBytes] = '\0';
-    
+
+    if (output && outputSize > 0) {
+        if (totalBytes >= outputSize) {
+            totalBytes = outputSize - 1;
+        }
+        output[totalBytes] = '\0';
+    }
+
     CloseHandle(hReadPipe);
-    WaitForSingleObject(pi.hProcess, 5000);
-    
+
+    DWORD waitResult = WaitForSingleObject(pi.hProcess, 10000);
+    if (waitResult != WAIT_OBJECT_0) {
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        if (output && outputSize > 0) {
+            _snprintf(output, outputSize, "WaitForSingleObject failed: %lu", waitResult);
+            output[outputSize - 1] = '\0';
+        }
+        return FALSE;
+    }
+
     DWORD exitCode = 0;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    
+    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        if (output && outputSize > 0) {
+            _snprintf(output, outputSize, "GetExitCodeProcess failed: %lu", GetLastError());
+            output[outputSize - 1] = '\0';
+        }
+        return FALSE;
+    }
+
+    {
+        WCHAR debugMsg[1024];
+        swprintf(debugMsg, 1024, L"[DEBUG] ExecuteCommand cmd=%s, exitCode=%lu\n", cmd, exitCode);
+        OutputDebugStringW(debugMsg);
+    }
+    if (output && output[0] != '\0') {
+        WCHAR outputW[2048] = {0};
+        MultiByteToWideChar(CP_ACP, 0, output, -1, outputW, 2048);
+        OutputDebugStringW(L"[DEBUG] ExecuteCommand output=\n");
+        OutputDebugStringW(outputW);
+        OutputDebugStringW(L"\n");
+    }
+
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
-    
+
     return (exitCode == 0);
+}
+
+static void CleanupBootEntryByGuid(const WCHAR* guid) {
+    if (!guid || wcslen(guid) == 0) return;
+
+    WCHAR cmd[512];
+    CHAR output[4096] = {0};
+    swprintf(cmd, 512, L"bcdedit /delete %s /f", guid);
+    ExecuteCommand(cmd, output, sizeof(output));
 }
 
 // 解析单个 BCD 条目
@@ -425,8 +475,8 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     CHAR output[4096] = {0};
     BOOL result = ExecuteCommand(cmd, output, sizeof(output));
 
-    WCHAR debugMsg[512];
-    swprintf(debugMsg, 512, L"[DEBUG] bcdedit /create result=%d, output=%S\n", result, output);
+    WCHAR debugMsg[1024];
+    swprintf(debugMsg, 1024, L"[DEBUG] cmd=%s, result=%d, output=%S\n", cmd, result, output);
     OutputDebugStringW(debugMsg);
 
     if (!result) {
@@ -457,9 +507,10 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     if (wcslen(normalizedDevice) > 0) {
         swprintf(cmd, 2048, L"bcdedit /set %s device %s", guid, normalizedDevice);
         result = ExecuteCommand(cmd, output, sizeof(output));
-        swprintf(debugMsg, 512, L"[DEBUG] bcdedit /set device result=%d, output=%S\n", result, output);
+        swprintf(debugMsg, 1024, L"[DEBUG] cmd=%s, result=%d, output=%S\n", cmd, result, output);
         OutputDebugStringW(debugMsg);
         if (!result) {
+            CleanupBootEntryByGuid(guid);
             return FALSE;
         }
     }
@@ -467,9 +518,10 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     if (wcslen(normalizedPath) > 0) {
         swprintf(cmd, 2048, L"bcdedit /set %s path \"%s\"", guid, normalizedPath);
         result = ExecuteCommand(cmd, output, sizeof(output));
-        swprintf(debugMsg, 512, L"[DEBUG] bcdedit /set path result=%d, output=%S\n", result, output);
+        swprintf(debugMsg, 1024, L"[DEBUG] cmd=%s, result=%d, output=%S\n", cmd, result, output);
         OutputDebugStringW(debugMsg);
         if (!result) {
+            CleanupBootEntryByGuid(guid);
             return FALSE;
         }
     }
@@ -477,8 +529,13 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     // 将新条目加入 firmware displayorder，保证在列表中可见
     swprintf(cmd, 2048, L"bcdedit /set {fwbootmgr} displayorder %s /addlast", guid);
     result = ExecuteCommand(cmd, output, sizeof(output));
-    swprintf(debugMsg, 512, L"[DEBUG] bcdedit /set displayorder result=%d, output=%S\n", result, output);
+    swprintf(debugMsg, 1024, L"[DEBUG] cmd=%s, result=%d, output=%S\n", cmd, result, output);
     OutputDebugStringW(debugMsg);
+
+    if (!result) {
+        CleanupBootEntryByGuid(guid);
+        return FALSE;
+    }
 
     if (newId) *newId = 1;
     return TRUE;

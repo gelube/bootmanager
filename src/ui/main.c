@@ -331,6 +331,11 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             WCHAR title[256] = {0};
             WCHAR path[512] = {0};
 
+            if (!UefiIsAdmin()) {
+                MessageBoxW(hWnd, L"需要管理员权限\n请以管理员身份运行此程序", L"错误", MB_ICONERROR);
+                break;
+            }
+
             if (!ShowAddEfiDialog(hWnd, title, path)) {
                 break;  // 用户取消
             }
