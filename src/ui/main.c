@@ -328,52 +328,27 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         
         // 菜单项处理 - 添加 EFI 启动项 (使用对话框)
         case ID_MENU_ADD_EFI: {
-            WCHAR menuTitle[256] = {0};
-            WCHAR filePath[512] = {0};
-            
-            // 显示添加启动项对话框
-            if (!ShowAddEfiDialog(hWnd, menuTitle, filePath)) {
+            WCHAR title[256] = {0};
+            WCHAR path[512] = {0};
+
+            if (!ShowAddEfiDialog(hWnd, title, path)) {
                 break;  // 用户取消
             }
-            
-            // 验证输入
-            if (wcslen(menuTitle) == 0 || wcslen(filePath) == 0) {
-                MessageBoxW(hWnd, L"请输入完整的启动项信息", L"错误", MB_OK | MB_ICONWARNING);
+
+            if (wcslen(title) == 0 || wcslen(path) == 0) {
+                MessageBoxW(hWnd, L"请输入完整信息", L"提示", MB_OK | MB_ICONWARNING);
                 break;
             }
-            
+
             SetStatus(L"⏳ 正在添加启动项...");
-            
-            // 使用 bcdedit 创建启动项
-            // bcdedit /create /d "菜单标题" /application bootsector
-            WCHAR cmd[1024];
-            swprintf(cmd, 1024, L"bcdedit /create /d \"%s\" /application bootsector", menuTitle);
-            
-            STARTUPINFOW si = {0};
-            si.cb = sizeof(si);
-            si.dwFlags = STARTF_USESHOWWINDOW;
-            si.wShowWindow = SW_HIDE;
-            
-            PROCESS_INFORMATION pi = {0};
-            if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, 
-                CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-                WaitForSingleObject(pi.hProcess, 5000);
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                
-                // 设置路径
-                swprintf(cmd, 1024, L"bcdedit /set {current} path \"%s\"", filePath);
-                CreateProcessW(NULL, cmd, NULL, NULL, FALSE, 
-                    CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
-                WaitForSingleObject(pi.hProcess, 5000);
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                
-                MessageBoxW(hWnd, L"启动项添加成功!\n\n请在列表中查看新启动项。", L"完成", MB_OK | MB_ICONINFORMATION);
+
+            DWORD newId = 0;
+            if (UefiAddBootEntry(title, L"", path, &newId)) {
+                MessageBoxW(hWnd, L"启动项添加成功", L"完成", MB_OK | MB_ICONINFORMATION);
                 SetStatus(L"✓ 启动项已添加");
                 RefreshBootList();
             } else {
-                MessageBoxW(hWnd, L"添加失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                MessageBoxW(hWnd, L"添加失败\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 添加失败");
             }
             break;

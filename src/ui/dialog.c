@@ -374,7 +374,10 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
                         WCHAR rootPath[8] = {d, L':', L'\\', 0};
                         hasEfi = CheckEfiFolder(rootPath);
                         TempUnmountVolume(d);
-                        // 即使卸载了，只要找到 EFI 就保留 driveLetter 用于显示
+                        // 临时挂载仅用于检查，找到 EFI 后不显示临时盘符
+                        if (hasEfi) {
+                            driveLetter = L'\0';
+                        }
                         break;
                     }
                 }
