@@ -1,6 +1,6 @@
 /**
  * Boot Manager Pro v3 - Dialog Header
- * 添加 EFI 启动项对话框
+ * 添加 EFI 菜单项对话框
  */
 
 #ifndef DIALOG_H
@@ -40,7 +40,7 @@ typedef struct {
     HWND hDlg;              // 对话框窗口
     HWND hComboDisk;        // 磁盘下拉框句柄
     HWND hComboPart;        // 分区下拉框句柄
-    WCHAR menuTitle[256];   // 菜单标题
+    WCHAR menuTitle[256];   // rEFInd 菜单标题
     INT selectedDisk;       // 选中的磁盘索引
     INT selectedPartition;  // 选中的分区索引
     WCHAR filePath[512];    // 启动文件路径
@@ -53,7 +53,7 @@ typedef struct {
 } ADD_EFI_DIALOG_DATA;
 
 // 函数声明
-BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath);
+BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter);
 
 // 辅助函数
 INT EnumPhysicalDisks(DISK_INFO** disks);

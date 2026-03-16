@@ -1,21 +1,14 @@
-/**
- * WIM/VHD Boot Entry Management - Implementation
- * 通过 refind.conf 写入 WIM 和 VHD 启动项
- */
 
-#include "wimboot.h"
-#include "refind_config.h"
-#include <wchar.h>
-#include <stdlib.h>
-#include <string.h>
-#include <commctrl.h>
-#include <shlobj.h>
+with open(r'C:\Users\Administrator\.openclaw\workspace\bootmanager\src\core\wimboot.c', 'rb') as f:
+    c = f.read().decode('utf-8')
 
-#pragma comment(lib, "comdlg32.lib")
-#pragma comment(lib, "shell32.lib")
+# 保留 header + ExecuteCommand，替换 WimAddBootEntry 到 WimSelectFileDialog 之间的内容
+header_end = c.find('BOOL WimAddBootEntry(')
+select_start = c.find('// \u6587\u4ef6\u5bf9\u8bdd\u6846\u51fd\u6570')
+if select_start == -1:
+    select_start = c.find('BOOL WimSelectFileDialog(')
 
-// 添加 WIM 启动项
-// Write WIM boot entry as rEFInd menuentry
+new_funcs = r"""// Write WIM boot entry as rEFInd menuentry
 // WIM must be accessible from UEFI (on ESP or same disk)
 BOOL WimAddBootEntry(const WCHAR* name, const WCHAR* wimPath, const WCHAR* imageIndex) {
     if (!name || !wimPath) return FALSE;
@@ -74,53 +67,9 @@ BOOL VhdAddBootEntry(const WCHAR* name, const WCHAR* vhdPath) {
         L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi", options);
 }
 
-BOOL WimSelectFileDialog(HWND hWnd, WCHAR* outPath, DWORD outPathSize) {
-    if (!outPath || outPathSize < MAX_PATH) return FALSE;
-    
-    WCHAR szFile[MAX_PATH] = L"";
-    
-    OPENFILENAMEW ofn = {0};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = hWnd;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrFilter = L"WIM 文件 (*.wim;*.swm)\\0*.wim;*.swm\\0所有文件 (*.*)\\0*.*\\0";
-    ofn.nFilterIndex = 1;
-    ofn.lpstrFileTitle = NULL;
-    ofn.nMaxFileTitle = 0;
-    ofn.lpstrInitialDir = NULL;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-    
-    if (GetOpenFileNameW(&ofn)) {
-        wcsncpy(outPath, szFile, outPathSize);
-        return TRUE;
-    }
-    
-    return FALSE;
-}
+"""
 
-// 文件对话框辅助函数 - 选择 VHD 文件
-BOOL VhdSelectFileDialog(HWND hWnd, WCHAR* outPath, DWORD outPathSize) {
-    if (!outPath || outPathSize < MAX_PATH) return FALSE;
-    
-    WCHAR szFile[MAX_PATH] = L"";
-    
-    OPENFILENAMEW ofn = {0};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = hWnd;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrFilter = L"VHD 文件 (*.vhd;*.vhdx)\\0*.vhd;*.vhdx\\0所有文件 (*.*)\\0*.*\\0";
-    ofn.nFilterIndex = 1;
-    ofn.lpstrFileTitle = NULL;
-    ofn.nMaxFileTitle = 0;
-    ofn.lpstrInitialDir = NULL;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-    
-    if (GetOpenFileNameW(&ofn)) {
-        wcsncpy(outPath, szFile, outPathSize);
-        return TRUE;
-    }
-    
-    return FALSE;
-}
+new_content = c[:header_end] + new_funcs + c[select_start:]
+with open(r'C:\Users\Administrator\.openclaw\workspace\bootmanager\src\core\wimboot.c', 'wb') as f:
+    f.write(new_content.encode('utf-8'))
+print('Done. Length:', len(new_content))

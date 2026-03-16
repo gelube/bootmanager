@@ -1,10 +1,11 @@
-﻿/**
+/**
  * BootMgr Boot Entry Management - Implementation
  * 閫氳繃 bcdedit 瑙ｆ瀽鍜岀鐞?BootMgr 鍚姩椤?
  */
 
 #include "../../include/boot.h"
 #include "../../include/bcdedit.h"
+#include "../../include/uefi_nvram.h"
 #include <wchar.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,7 +51,20 @@ BOOL BootMgrRequestAdmin(HWND hWnd) {
 }
 
 // 鎵ц鍛戒护骞舵崟鑾疯緭鍑?
+static BOOL FindEntryGuidById(BOOTMGR_BOOT_LIST* list, DWORD id, WCHAR* guid, DWORD guidSize);
+
 static BOOL ExecuteCommand(const WCHAR* cmd, CHAR* output, DWORD outputSize) {
+    if (cmd && wcsncmp(cmd, L"bcdedit ", 8) == 0) {
+        WCHAR wideOutput[8192] = {0};
+        BOOL ok = BcdEditExecute(cmd + 8, wideOutput, 8192);
+        if (output && outputSize > 0) {
+            if (WideCharToMultiByte(CP_ACP, 0, wideOutput, -1, output, (int)outputSize, NULL, NULL) == 0) {
+                output[0] = '\0';
+            }
+        }
+        return ok;
+    }
+
     SECURITY_ATTRIBUTES sa = {0};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -420,123 +434,153 @@ void BootMgrFreeBootList(BOOTMGR_BOOT_LIST* list) {
 
 // 鑾峰彇 BootOrder
 BOOL BootMgrGetBootOrder(DWORD** bootOrder, DWORD* count) {
-    // Windows 涓嶇洿鎺ユ毚闇?BootOrder锛岄渶瑕佷粠 bcdedit 瑙ｆ瀽
+    WCHAR output[8192] = {0};
+    WCHAR* displayOrder = NULL;
+    WCHAR* p = NULL;
+    DWORD values[256];
+    DWORD valueCount = 0;
+    DWORD* result = NULL;
+
+    if (!bootOrder || !count) {
+        return FALSE;
+    }
+
     *bootOrder = NULL;
     *count = 0;
-    return FALSE;
+
+    if (!BcdEditExecute(L"/enum {fwbootmgr}", output, 8192)) {
+        return FALSE;
+    }
+
+    displayOrder = wcsstr(output, L"displayorder");
+    if (!displayOrder) {
+        return FALSE;
+    }
+
+    p = displayOrder;
+    while ((p = wcschr(p, L'{')) != NULL) {
+        WCHAR* end = wcschr(p, L'}');
+        WCHAR guid[64] = {0};
+        if (!end) {
+            break;
+        }
+
+        size_t guidLen = (size_t)(end - p + 1);
+        if (guidLen >= 8 && guidLen < 64) {
+            wcsncpy(guid, p, guidLen);
+            guid[guidLen] = L'\0';
+            values[valueCount++] = ComputeEntryIdFromGuid(guid);
+            if (valueCount >= 256) {
+                break;
+            }
+        }
+
+        p = end + 1;
+        if (*p != L' ' && *p != L'\t' && *p != L'\r' && *p != L'\n') {
+            break;
+        }
+    }
+
+    if (valueCount == 0) {
+        return FALSE;
+    }
+
+    result = (DWORD*)calloc(valueCount, sizeof(DWORD));
+    if (!result) {
+        return FALSE;
+    }
+
+    memcpy(result, values, valueCount * sizeof(DWORD));
+    *bootOrder = result;
+    *count = valueCount;
+    return TRUE;
 }
 
 // 璁剧疆 BootOrder
 BOOL BootMgrSetBootOrder(const DWORD* bootOrder, DWORD count) {
-    (void)bootOrder;
-    (void)count;
-    return FALSE;
+    BOOTMGR_BOOT_LIST* list = NULL;
+    WCHAR cmd[4096] = {0};
+    size_t offset = 0;
+    DWORD i;
+    BOOL foundAny = FALSE;
+    CHAR output[4096] = {0};
+
+    if (!bootOrder || count == 0) {
+        return FALSE;
+    }
+
+    list = BootMgrScanBootEntries();
+    if (!list) {
+        return FALSE;
+    }
+
+    offset = swprintf(cmd, 4096, L"bcdedit /set {fwbootmgr} displayorder");
+    for (i = 0; i < count && offset < 4000; ++i) {
+        WCHAR guid[64] = {0};
+        if (!FindEntryGuidById(list, bootOrder[i], guid, 64)) {
+            continue;
+        }
+
+        offset += swprintf(cmd + offset, 4096 - offset, L" %s", guid);
+        foundAny = TRUE;
+    }
+
+    BootMgrFreeBootList(list);
+
+    if (!foundAny) {
+        return FALSE;
+    }
+
+    return ExecuteCommand(cmd, output, sizeof(output));
 }
 
 // 娣诲姞鍚姩椤?
 BOOL BootMgrAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* filePath, DWORD* newId) {
-    WCHAR cmd[2048];
-    WCHAR normalizedDevice[256] = {0};
-    WCHAR normalizedPath[512] = {0};
-
-    OutputDebugStringW(L"[DEBUG] BootMgrAddBootEntry called\n");
-    OutputDebugStringW(name ? name : L"(null)");
-    OutputDebugStringW(L"\n");
-    OutputDebugStringW(filePath ? filePath : L"(null)");
-    OutputDebugStringW(L"\n");
-
     if (!name || wcslen(name) == 0) return FALSE;
+    if (!BootMgrIsAdmin()) return FALSE;
 
-    if (!BootMgrIsAdmin()) {
-        OutputDebugStringW(L"[DEBUG] BootMgrAddBootEntry aborted: not running as admin\n");
-        return FALSE;
+    // Normalize EFI path: strip drive letter prefix (X:\EFI\... -> \EFI\...)
+    WCHAR efiPath[512] = {0};
+    if (filePath && filePath[0] >= L'A' && filePath[0] <= L'Z' && filePath[1] == L':' && filePath[2] == L'\\') {
+        swprintf(efiPath, 512, L"\\%s", filePath + 3);
+    } else if (filePath) {
+        wcsncpy(efiPath, filePath, 511);
     }
 
-    if (devicePath && wcslen(devicePath) > 0) {
-        wcsncpy(normalizedDevice, devicePath, 255);
-        normalizedDevice[255] = L'\0';
+    if (!UefiNvramAcquirePrivilege()) return FALSE;
+
+    // Find a free BootXXXX slot
+    UINT16 bootNum = 0;
+    for (UINT32 n = 0; n <= 0xFFFF; n++) {
+        UEFI_BOOT_ENTRY* existing = UefiNvramGetBootEntry((UINT16)n);
+        if (!existing) { bootNum = (UINT16)n; break; }
+        UefiNvramFreeEntry(existing);
     }
 
-    if (filePath && wcslen(filePath) > 0) {
-        // 鏀寔浼犲叆 X:\EFI\xxx.efi锛岃嚜鍔ㄦ媶鍒嗘垚 device + path
-        if (filePath[0] >= L'A' && filePath[0] <= L'Z' && filePath[1] == L':' && filePath[2] == L'\\') {
-            if (wcslen(normalizedDevice) == 0) {
-                swprintf(normalizedDevice, 256, L"partition=%c:", filePath[0]);
-            }
-            // 璺緞浠庣 3 涓瓧绗﹀紑濮嬶紙璺宠繃 X:\锛?
-            swprintf(normalizedPath, 512, L"\\%s", filePath + 3);
-            
-            // 璋冭瘯杈撳嚭
-            OutputDebugStringW(L"[DEBUG] Split path: device=");
-            OutputDebugStringW(normalizedDevice);
-            OutputDebugStringW(L", path=");
-            OutputDebugStringW(normalizedPath);
-            OutputDebugStringW(L"\n");
-        } else {
-            wcsncpy(normalizedPath, filePath, 511);
-            normalizedPath[511] = L'\0';
+    DWORD blobSize = 0;
+    BYTE* blob = UefiNvramBuildLoadOption(name, efiPath, LOAD_OPTION_ACTIVE, &blobSize);
+    if (!blob) return FALSE;
+
+    BOOL ok = UefiNvramSetBootEntry(bootNum, blob, blobSize);
+    free(blob);
+    if (!ok) return FALSE;
+
+    // Append to BootOrder
+    UEFI_BOOT_ORDER bo = {0};
+    if (UefiNvramGetBootOrder(&bo)) {
+        UINT16* newOrder = (UINT16*)malloc((bo.Count + 1) * sizeof(UINT16));
+        if (newOrder) {
+            memcpy(newOrder, bo.Order, bo.Count * sizeof(UINT16));
+            newOrder[bo.Count] = bootNum;
+            UefiNvramSetBootOrder(newOrder, bo.Count + 1);
+            free(newOrder);
         }
+        UefiNvramFreeBootOrder(&bo);
+    } else {
+        UefiNvramSetBootOrder(&bootNum, 1);
     }
 
-    // EFI 绋嬪簭搴斾娇鐢?BOOTAPP 绫诲瀷
-    swprintf(cmd, 2048, L"bcdedit /create /d \"%s\" /application BOOTAPP", name);
-
-    CHAR output[4096] = {0};
-    BOOL result = ExecuteCommand(cmd, output, sizeof(output));
-
-    WCHAR debugMsg[1024];
-    swprintf(debugMsg, 1024, L"[DEBUG] cmd=%s, result=%d, output=%S\n", cmd, result, output);
-    OutputDebugStringW(debugMsg);
-
-    if (!result) {
-        return FALSE;
-    }
-
-    // 瑙ｆ瀽杩斿洖 GUID: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
-    WCHAR guid[64] = {0};
-    if (!ExtractGuidFromOutput(output, guid, 64)) {
-        OutputDebugStringW(L"[DEBUG] failed to parse GUID from bcdedit output\n");
-        return FALSE;
-    }
-
-    // device/path 闇€鍚屾椂姝ｇ‘璁剧疆锛屽惁鍒欐潯鐩笉浼氱敓鏁?
-    if (wcslen(normalizedDevice) > 0) {
-        swprintf(cmd, 2048, L"bcdedit /set %s device %s", guid, normalizedDevice);
-        result = ExecuteCommand(cmd, output, sizeof(output));
-        swprintf(debugMsg, 1024, L"[DEBUG] cmd=%s, result=%d, output=%S\n", cmd, result, output);
-        OutputDebugStringW(debugMsg);
-        if (!result) {
-            CleanupBootEntryByGuid(guid);
-            return FALSE;
-        }
-    }
-
-    if (wcslen(normalizedPath) > 0) {
-        swprintf(cmd, 2048, L"bcdedit /set %s path \"%s\"", guid, normalizedPath);
-        result = ExecuteCommand(cmd, output, sizeof(output));
-        swprintf(debugMsg, 1024, L"[DEBUG] cmd=%s, result=%d, output=%S\n", cmd, result, output);
-        OutputDebugStringW(debugMsg);
-        if (!result) {
-            CleanupBootEntryByGuid(guid);
-            return FALSE;
-        }
-    }
-
-    // 灏嗘柊鏉＄洰鍔犲叆 firmware displayorder锛屼繚璇佸湪鍒楄〃涓彲瑙?
-    swprintf(cmd, 2048, L"bcdedit /set {fwbootmgr} displayorder %s /addlast", guid);
-    result = ExecuteCommand(cmd, output, sizeof(output));
-    swprintf(debugMsg, 1024, L"[DEBUG] cmd=%s, result=%d, output=%S\n", cmd, result, output);
-    OutputDebugStringW(debugMsg);
-
-    if (!result) {
-        WCHAR fwError[1024];
-        swprintf(fwError, 1024, L"[ERROR] Failed to register %s into {fwbootmgr} displayorder. bcdedit output: %S\n", guid, output);
-        OutputDebugStringW(fwError);
-        CleanupBootEntryByGuid(guid);
-        return FALSE;
-    }
-
-    if (newId) *newId = ComputeEntryIdFromGuid(guid);
+    if (newId) *newId = (DWORD)bootNum;
     return TRUE;
 }
 
@@ -600,15 +644,45 @@ BOOL BootMgrDeleteBootEntry(DWORD id) {
 
 // 涓婄Щ鍚姩椤?
 BOOL BootMgrMoveBootEntryUp(BOOTMGR_BOOT_LIST* list, DWORD id) {
-    (void)list;
-    (void)id;
+    DWORD i;
+
+    if (!list || !list->entries || id == 0) return FALSE;
+
+    if ((!list->bootOrder || list->bootOrderCount == 0) && !BootMgrGetBootOrder(&list->bootOrder, &list->bootOrderCount)) {
+        return FALSE;
+    }
+
+    for (i = 1; i < list->bootOrderCount; ++i) {
+        if (list->bootOrder[i] == id) {
+            DWORD tmp = list->bootOrder[i - 1];
+            list->bootOrder[i - 1] = list->bootOrder[i];
+            list->bootOrder[i] = tmp;
+            return BootMgrSetBootOrder(list->bootOrder, list->bootOrderCount);
+        }
+    }
+
     return FALSE;
 }
 
 // 涓嬬Щ鍚姩椤?
 BOOL BootMgrMoveBootEntryDown(BOOTMGR_BOOT_LIST* list, DWORD id) {
-    (void)list;
-    (void)id;
+    DWORD i;
+
+    if (!list || !list->entries || id == 0) return FALSE;
+
+    if ((!list->bootOrder || list->bootOrderCount == 0) && !BootMgrGetBootOrder(&list->bootOrder, &list->bootOrderCount)) {
+        return FALSE;
+    }
+
+    for (i = 0; i + 1 < list->bootOrderCount; ++i) {
+        if (list->bootOrder[i] == id) {
+            DWORD tmp = list->bootOrder[i + 1];
+            list->bootOrder[i + 1] = list->bootOrder[i];
+            list->bootOrder[i] = tmp;
+            return BootMgrSetBootOrder(list->bootOrder, list->bootOrderCount);
+        }
+    }
+
     return FALSE;
 }
 

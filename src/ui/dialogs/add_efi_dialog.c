@@ -1,13 +1,13 @@
 /**
  * Boot Manager Pro v3 - Dialog Implementation
- * 添加 EFI 启动项对话框
+ * 添加 EFI 菜单项对话框
  * 
  * 功能:
  * - 模态对话框，类似 BOOTICE 风格
  * - 自动枚举物理磁盘
  * - 根据选中的磁盘动态枚举 ESP 分区
  * - 文件浏览选择 EFI 文件
- * - 验证输入并创建启动项
+ * - 验证输入并生成 rEFInd 菜单项参数
  */
 
 #include <windows.h>
@@ -600,7 +600,7 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
     return DefWindowProcW(hDlg, msg, wParam, lParam);
 }
 
-static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
+static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter)
 {
     static const WCHAR kAddEfiDialogClass[] = L"BootManagerAddEfiDialog";
     static BOOL classRegistered = FALSE;
@@ -630,7 +630,7 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
     HWND hDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE,
         kAddEfiDialogClass,
-        L"添加 EFI 启动项",
+        L"添加 EFI 菜单项",
         DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         0, 0, 420, 380,
         hParent,
@@ -773,6 +773,19 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
     if (result == IDOK) {
         wcsncpy(outTitle, data.menuTitle, 256);
         wcsncpy(outPath, data.filePath, 512);
+        
+        // 返回选中分区的盘符
+        if (outDriveLetter && data.selectedPartition >= 0 && 
+            data.partitions && data.selectedPartition < data.partitionCount) {
+            WCHAR letter = data.partitions[data.selectedPartition].driveLetter;
+            if (letter >= L'A' && letter <= L'Z') {
+                swprintf(outDriveLetter, 4, L"%c:", letter);
+            } else {
+                outDriveLetter[0] = L'\0';
+            }
+        } else if (outDriveLetter) {
+            outDriveLetter[0] = L'\0';
+        }
     }
 
     // 释放资源
@@ -782,7 +795,7 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
     return result;
 }
 
-BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath)
+BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter)
 {
-    return CreateAddEfiDialog(hParent, outTitle, outPath) == IDOK;
+    return CreateAddEfiDialog(hParent, outTitle, outPath, outDriveLetter) == IDOK;
 }

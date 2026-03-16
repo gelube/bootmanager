@@ -12,8 +12,10 @@ if not exist dist mkdir dist
 echo [INFO] Testing compilation...
 echo.
 
-gcc -municode src\ui\main.c src\core\*.c -o dist\BootManagerPro_test.exe ^
-    -m64 -mwindows -lcomctl32 -lshell32 -ladvapi32 -lole32 -luuid -O2 -Wall -v 2>&1
+gcc -municode src\ui\main.c src\ui\dialogs\*.c src\ui\pages\*.c ^
+    src\core\*.c src\hal\*.c src\utils\*.c ^
+    -I include -o dist\BootManagerPro_test.exe ^
+    -m64 -mwindows -lcomctl32 -lcomdlg32 -lshell32 -ladvapi32 -lole32 -luuid -O2 -Wall -v 2>&1
 
 if %errorlevel% neq 0 (
     echo.

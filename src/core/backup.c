@@ -270,52 +270,78 @@ BOOL BackupAll(const WCHAR* backupDir, BACKUP_TYPE types) {
 
 // Full restore
 BOOL RestoreAll(const WCHAR* backupDir, BACKUP_TYPE types) {
-    // Implementation depends on specific backup structure
-    // This is a simplified version
-    return TRUE;
+    BOOL result = TRUE;
+    WCHAR path[MAX_PATH];
+
+    if (!backupDir) return FALSE;
+
+    if (types & BACKUP_MBR) {
+        swprintf(path, MAX_PATH, L"%s\\mbr.bin", backupDir);
+        if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
+            result = RestoreMBR(L"PhysicalDrive0", path) && result;
+        } else {
+            result = FALSE;
+        }
+    }
+
+    if (types & BACKUP_BCD) {
+        swprintf(path, MAX_PATH, L"%s\\bcd.bak", backupDir);
+        if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
+            result = RestoreBCD(path) && result;
+        } else {
+            result = FALSE;
+        }
+    }
+
+    if (types & BACKUP_NVRAM) {
+        swprintf(path, MAX_PATH, L"%s\\nvram.bak", backupDir);
+        if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
+            result = RestoreNVRAM(path) && result;
+        } else {
+            result = FALSE;
+        }
+    }
+
+    return result;
+}
+
+static BOOL RunElevatedCommand(const WCHAR* parameters) {
+    SHELLEXECUTEINFOW sei = {0};
+    DWORD exitCode = 1;
+
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb = L"runas";
+    sei.lpFile = L"cmd.exe";
+    sei.lpParameters = parameters;
+    sei.nShow = SW_HIDE;
+
+    if (!ShellExecuteExW(&sei)) {
+        return FALSE;
+    }
+
+    WaitForSingleObject(sei.hProcess, INFINITE);
+    GetExitCodeProcess(sei.hProcess, &exitCode);
+    CloseHandle(sei.hProcess);
+    return exitCode == 0;
 }
 
 // Repair using bootrec
 BOOL RepairBootRec(const WCHAR* targetDrive) {
     (void)targetDrive;  // Unused parameter
-    
-    // /FixMbr
-    SHELLEXECUTEINFOW sei = {0};
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas";
-    sei.lpFile = L"cmd.exe";
-    sei.nShow = SW_HIDE;
-    
-    // Fix MBR
-    sei.lpParameters = L"/c bootrec /fixmbr";
-    if (ShellExecuteExW(&sei)) {
-        WaitForSingleObject(sei.hProcess, INFINITE);
-        CloseHandle(sei.hProcess);
+
+    if (!RunElevatedCommand(L"/c bootrec /fixmbr")) {
+        return FALSE;
     }
-    
-    // Fix Boot
-    sei.lpParameters = L"/c bootrec /fixboot";
-    if (ShellExecuteExW(&sei)) {
-        WaitForSingleObject(sei.hProcess, INFINITE);
-        CloseHandle(sei.hProcess);
+
+    // /fixboot 在某些环境会返回拒绝访问，不阻断后续重建流程
+    RunElevatedCommand(L"/c bootrec /fixboot");
+
+    if (!RunElevatedCommand(L"/c bootrec /scanos")) {
+        return FALSE;
     }
-    
-    // Scan OS
-    sei.lpParameters = L"/c bootrec /scanos";
-    if (ShellExecuteExW(&sei)) {
-        WaitForSingleObject(sei.hProcess, INFINITE);
-        CloseHandle(sei.hProcess);
-    }
-    
-    // Rebuild BCD
-    sei.lpParameters = L"/c bootrec /rebuildbcd";
-    if (ShellExecuteExW(&sei)) {
-        WaitForSingleObject(sei.hProcess, INFINITE);
-        CloseHandle(sei.hProcess);
-    }
-    
-    return TRUE;
+
+    return RunElevatedCommand(L"/c bootrec /rebuildbcd");
 }
 
 // Repair using bcdboot
