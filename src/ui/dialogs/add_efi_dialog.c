@@ -559,7 +559,7 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
                     return 0;
                 }
 
-                // 选中分区有盘符且输入相对 EFI 路径时，补全为绝对路径，便于后续推导 device/path
+                // 选中分区有盘符且输入相对 EFI 路径时，补全为绝对路径
                 if (data->selectedPartition >= 0 && data->partitions &&
                     data->selectedPartition < data->partitionCount &&
                     data->partitions[data->selectedPartition].driveLetter >= L'A' &&
@@ -573,7 +573,8 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
                     data->filePath[511] = L'\0';
                 }
 
-                PostMessageW(hDlg, WM_APP + 1, IDOK, 0);
+                // 保存结果并关闭对话框
+                data->result = IDOK;
                 DestroyWindow(hDlg);
                 return 0;
             }
@@ -581,7 +582,7 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
 
         case IDCANCEL:
             if (HIWORD(wParam) == BN_CLICKED) {
-                PostMessageW(hDlg, WM_APP + 1, IDCANCEL, 0);
+                data->result = IDCANCEL;
                 DestroyWindow(hDlg);
                 return 0;
             }
@@ -591,7 +592,7 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
 
     case WM_CLOSE:
         if (data) {
-            PostMessageW(hDlg, WM_APP + 1, IDCANCEL, 0);
+            data->result = IDCANCEL;
         }
         DestroyWindow(hDlg);
         return 0;
@@ -610,6 +611,7 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath,
     data.filePath[0] = L'\0';
     data.selectedDisk = 0;
     data.selectedPartition = 0;
+    data.result = IDCANCEL;
 
     if (!classRegistered) {
         WNDCLASSEXW wc = {0};
@@ -626,7 +628,7 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath,
         classRegistered = TRUE;
     }
 
-    // 创建对话框窗口 - 增加高度以容纳所有控件
+    // 创建对话框窗口
     HWND hDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE,
         kAddEfiDialogClass,
@@ -730,7 +732,7 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath,
         SendMessageW(hComboDisk, CB_SETCURSEL, 0, 0);
     }
 
-    // 初始化分区列表，默认跟随当前磁盘选择
+    // 初始化分区列表
     UpdatePartitionCombo(&data);
 
     // 居中显示
@@ -746,31 +748,20 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath,
     SetFocus(hEditTitle);
     SendMessageW(hEditTitle, EM_SETSEL, 0, -1);
 
-    // 消息循环 (模态)
+    // 消息循环
     MSG msg;
-    BOOL bRet;
-    INT_PTR result = IDCANCEL;
-
-    while (IsWindow(hDlg)) {
-        bRet = GetMessageW(&msg, NULL, 0, 0);
-        if (bRet == 0 || bRet == -1) break;
-
+    while (IsWindow(hDlg) && GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
-
-        if (msg.message == WM_APP + 1) {
-            result = (INT_PTR)msg.wParam;
-            break;
-        }
     }
 
     // 清理
-    DestroyWindow(hDlg);
+    if (IsWindow(hDlg)) DestroyWindow(hDlg);
     EnableWindow(hParent, TRUE);
     SetForegroundWindow(hParent);
 
     // 复制输出
-    if (result == IDOK) {
+    if (data.result == IDOK) {
         wcsncpy(outTitle, data.menuTitle, 256);
         wcsncpy(outPath, data.filePath, 512);
         
@@ -792,7 +783,7 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath,
     FreeDiskList(data.disks, data.diskCount);
     FreePartitionList(data.partitions, data.partitionCount);
 
-    return result;
+    return data.result;
 }
 
 BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter)

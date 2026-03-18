@@ -18,9 +18,11 @@
 #include "../core/refind_config.h"
 #include "../core/backup.h"
 #include "../../include/esp.h"
+#include "../../include/boot_mode.h"
 #include "../core/wimboot.h"
 #include "dialog.h"
 #include "../../include/refind_page.h"
+#include "../../include/bcd_page.h"
 
 #define REFIND_SOURCE_PATH L".\\refind"
 
@@ -58,9 +60,9 @@
 // 尺寸
 // ============================================
 #define WINDOW_WIDTH        1000
-#define WINDOW_HEIGHT       650
-#define SIDEBAR_WIDTH       240
-#define NAV_ITEM_HEIGHT     52
+#define WINDOW_HEIGHT       720
+#define SIDEBAR_WIDTH       220
+#define NAV_ITEM_HEIGHT     48
 #define CONTENT_PADDING     32
 #define BTN_HEIGHT          38
 #define BTN_HEIGHT_LARGE    46
@@ -70,14 +72,14 @@
 // 控件 ID
 // ============================================
 enum {
-    ID_NAV_UEFI = 100, ID_NAV_REFIND, ID_NAV_BACKUP, ID_NAV_ABOUT,
+    ID_NAV_UEFI = 100, ID_NAV_MBR, ID_NAV_REFIND, ID_NAV_BCD, ID_NAV_BACKUP, ID_NAV_ABOUT,
     ID_LIST_BOOT = 200, ID_BTN_REFRESH, ID_BTN_ADD_ENTRY, ID_BTN_DELETE_ENTRY,
     ID_BTN_MOVE_UP, ID_BTN_MOVE_DOWN, ID_BTN_SET_DEFAULT, ID_BTN_MBR_FIX,
     ID_LIST_REFIND = 260, ID_BTN_REFIND_REFRESH, ID_BTN_REFIND_DELETE, ID_BTN_ADD_MENU,
     ID_BTN_INSTALL = 300, ID_BTN_UNINSTALL,
     ID_EDIT_BACKUP_PATH = 400, ID_BTN_BROWSE_BKP,
-    ID_BTN_BACKUP_MBR, ID_BTN_BACKUP_BCD, ID_BTN_BACKUP_NV,
-    ID_BTN_RESTORE, ID_BTN_REPAIR,
+    ID_BTN_BACKUP_MBR, ID_BTN_BACKUP_BCD,
+    ID_BTN_RESTORE,
     ID_BTN_MBR_REPAIR = 450, ID_BTN_UEFI_REPAIR,
     ID_STATUS_TEXT = 500,
     // 下拉菜单项 ID
@@ -92,7 +94,7 @@ enum {
 static HWND g_hMainWnd = NULL, g_hContent = NULL, g_hListView = NULL, g_hStatusText = NULL;
 static int g_currentPage = 0;
 static HFONT g_fontTitle = NULL, g_fontBody = NULL, g_fontSmall = NULL;
-static HWND g_navItems[4] = {0};
+static HWND g_navItems[6] = {0};
 static UEFI_BOOT_LIST* g_bootList = NULL;
 
 // ============================================
@@ -105,8 +107,8 @@ static void CreateContentArea(HWND);
 static void SwitchPage(int);
 static void SetStatus(const WCHAR*);
 static void BuildUEFIPage(HWND);
+static void BuildMBRPage(HWND);
 static void BuildRefindPage(HWND);
-static void BuildBackupPage(HWND);
 static void BuildAdvancedPage(HWND);
 static void BuildAboutPage(HWND);
 static void RefreshBootList(void);
@@ -209,18 +211,23 @@ static BOOL ResolveRefindSourcePath(WCHAR* sourcePath, DWORD size)
 static BOOL BrowseBackupFile(HWND hWnd, WCHAR* filePath, DWORD size)
 {
     OPENFILENAMEW ofn = {0};
+    WCHAR backupDir[MAX_PATH] = {0};
 
     if (!filePath || size == 0) {
         return FALSE;
     }
+
+    // 获取备份目录作为默认打开路径
+    BackupGetBackupDir(backupDir, MAX_PATH);
 
     filePath[0] = L'\0';
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hWnd;
     ofn.lpstrFile = filePath;
     ofn.nMaxFile = size;
-    ofn.lpstrFilter = L"Backup Files (*.bak;*.bin)\0*.bak;*.bin\0All Files (*.*)\0*.*\0";
-    ofn.lpstrTitle = L"选择备份文件";
+    ofn.lpstrFilter = L"备份文件 (*.bak;*.bin)\0*.bak;*.bin\0所有文件 (*.*)\0*.*\0";
+    ofn.lpstrTitle = L"选择备份文件（默认打开程序目录下的 backups 文件夹）";
+    ofn.lpstrInitialDir = backupDir;  // 默认打开备份目录
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
 
     return GetOpenFileNameW(&ofn);
@@ -230,15 +237,20 @@ static BOOL BrowseBackupFolder(HWND hWnd, WCHAR* folderPath, DWORD size)
 {
     BROWSEINFOW bi = {0};
     PIDLIST_ABSOLUTE pidl;
+    WCHAR backupDir[MAX_PATH] = {0};
 
     if (!folderPath || size == 0) {
         return FALSE;
     }
 
+    // 获取默认备份目录
+    BackupGetBackupDir(backupDir, MAX_PATH);
+
     folderPath[0] = L'\0';
     bi.hwndOwner = hWnd;
-    bi.lpszTitle = L"选择备份目录";
+    bi.lpszTitle = L"选择备份目录（推荐使用程序目录下的 backups 文件夹）";
     bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    
     pidl = SHBrowseForFolderW(&bi);
     if (!pidl) {
         return FALSE;
@@ -400,9 +412,11 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case ID_NAV_UEFI: SwitchPage(0); break;
-        case ID_NAV_REFIND: SwitchPage(1); break;
-        case ID_NAV_BACKUP: SwitchPage(2); break;
-        case ID_NAV_ABOUT: SwitchPage(3); break;
+        case ID_NAV_MBR: SwitchPage(1); break;
+        case ID_NAV_REFIND: SwitchPage(2); break;
+        case ID_NAV_BCD: SwitchPage(3); break;
+        case ID_NAV_BACKUP: SwitchPage(4); break;
+        case ID_NAV_ABOUT: SwitchPage(5); break;
         
         case ID_BTN_REFRESH:
             RefreshBootList();
@@ -414,9 +428,111 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             SetStatus(L"✓ rEFInd 条目已刷新");
             break;
         
-        // 添加启动项 - 下拉菜单（仅 EFI）
+        // 添加启动项 - 直接添加 EFI
         case ID_BTN_ADD_ENTRY: {
-            // 直接显示添加 EFI 对话框
+            WCHAR title[256] = {0};
+            WCHAR path[512] = {0};
+            WCHAR driveLetter[4] = {0};
+
+            if (!ShowAddEfiDialog(hWnd, title, path, driveLetter)) break;
+
+            if (wcslen(title) == 0 || wcslen(path) == 0) {
+                MessageBoxW(hWnd, L"请填写完整信息", L"提示", MB_OK | MB_ICONWARNING);
+                break;
+            }
+
+            SetStatus(L"正在添加...");
+
+            // Mount ESP
+            WCHAR espDrive[4] = {0};
+            if (!MountESP(espDrive)) {
+                MessageBoxW(hWnd, L"ESP 分区挂载失败\n\n请以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"挂载失败");
+                break;
+            }
+
+            // Check if file is on ESP
+            WCHAR finalPath[512] = {0};
+            WCHAR srcPath[512] = {0};
+            
+            if (path[0] == espDrive[0]) {
+                // File already on ESP
+                swprintf(finalPath, 512, L"\\%s", path + 2);
+            } else {
+                // Need to copy to ESP
+                wcsncpy(srcPath, path, 511);
+                
+                // Check source file
+                if (GetFileAttributesW(srcPath) == INVALID_FILE_ATTRIBUTES) {
+                    MessageBoxW(hWnd, L"源文件不存在", L"错误", MB_OK | MB_ICONERROR);
+                    UnmountESP(espDrive[0]);
+                    break;
+                }
+                
+                // Get base name for directory
+                WCHAR fileBaseName[64] = L"boot";
+                WCHAR* lastSlash = wcsrchr(path, L'\\');
+                if (lastSlash) {
+                    WCHAR fileName[128];
+                    wcsncpy(fileName, lastSlash + 1, 127);
+                    WCHAR* dot = wcsrchr(fileName, L'.');
+                    if (dot) *dot = L'\0';
+                    wcsncpy(fileBaseName, fileName, 63);
+                }
+                
+                // Create directories
+                WCHAR efiRoot[MAX_PATH];
+                swprintf(efiRoot, MAX_PATH, L"%s\\EFI", espDrive);
+                CreateDirectoryW(efiRoot, NULL);
+                
+                WCHAR destDir[MAX_PATH];
+                swprintf(destDir, MAX_PATH, L"%s\\EFI\\%s", espDrive, fileBaseName);
+                CreateDirectoryW(destDir, NULL);
+                
+                // Destination filename
+                WCHAR destFileName[128] = L"boot.efi";
+                if (lastSlash) wcsncpy(destFileName, lastSlash + 1, 127);
+                
+                swprintf(finalPath, 512, L"\\EFI\\%s\\%s", fileBaseName, destFileName);
+                WCHAR destPath[MAX_PATH];
+                swprintf(destPath, MAX_PATH, L"%s%s", espDrive, finalPath);
+                
+                // Copy file
+                if (!CopyFileW(srcPath, destPath, FALSE)) {
+                    MessageBoxW(hWnd, L"复制文件失败", L"错误", MB_OK | MB_ICONERROR);
+                    UnmountESP(espDrive[0]);
+                    break;
+                }
+            }
+
+            // Add to NVRAM
+            DWORD newId = 0;
+            BOOL addOk = UefiAddBootEntry(title, NULL, finalPath, &newId);
+
+            UnmountESP(espDrive[0]);
+
+            if (addOk) {
+                WCHAR msg[256];
+                swprintf(msg, 256, L"添加成功！\n\n名称：%s\n路径：%s\nBootID: %04X", title, finalPath, newId);
+                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
+                SetStatus(L"添加成功");
+                RefreshBootList();
+            } else {
+                MessageBoxW(hWnd, L"添加失败\n\n请以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"添加失败");
+            }
+            break;
+        }
+        
+        case ID_MENU_ADD_EFI: {
+            // 根据当前页面决定添加到哪里
+            if (g_currentPage == 1) {
+                // rEFInd 页面 - 添加到 rEFInd menuentry
+                RefindPageAddEfi(hWnd);
+                break;
+            }
+            
+            // 其他页面 - 添加到 UEFI NVRAM
             WCHAR title[256] = {0};
             WCHAR path[512] = {0};
             WCHAR driveLetter[4] = {0};
@@ -432,9 +548,16 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             SetStatus(L"正在添加 EFI 启动项...");
 
+            {
+                WCHAR dbg[768];
+                swprintf(dbg, 768, L"[EFI Add] title=%s path=%s driveLetter=%s\n", title, path, driveLetter);
+                OutputDebugStringW(dbg);
+            }
+
             WCHAR fullPath[512] = {0};
             WCHAR mountedEsp[4] = {0};
             BOOL espMountedForAdd = FALSE;
+            // devicePath: 优先使用对话框返回的 ESP 盘符，否则从文件路径推导
             WCHAR devicePath[32] = {0};
 
             if (path[0] == L'\\' && path[1] == L'\\') {
@@ -442,13 +565,19 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 SetStatus(L"✗ 添加失败：路径格式错误");
                 break;
             } else if (path[1] == L':') {
+                // 已经是绝对路径（用户通过浏览选择）
                 wcsncpy(fullPath, path, 511);
+                // device 从文件路径的盘符推导（文件在哪个分区就用哪个）
                 swprintf(devicePath, 32, L"partition=%c:", path[0]);
             } else if (path[0] == L'\\') {
+                // 相对路径（如 \EFI\xxx.efi）
+                // 优先使用对话框返回的 ESP 盘符
                 if (wcslen(driveLetter) >= 2) {
                     swprintf(fullPath, 512, L"%s%s", driveLetter, path);
                     swprintf(devicePath, 32, L"partition=%c:", driveLetter[0]);
+                    OutputDebugStringW(L"[EFI Add] Using dialog driveLetter for relative path\n");
                 } else {
+                    // 没有盘符，挂载 ESP
                     if (!MountESP(mountedEsp)) {
                         MessageBoxW(hWnd,
                             L"ESP 分区挂载失败\n\n"
@@ -470,6 +599,13 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             fullPath[511] = L'\0';
 
+            {
+                WCHAR dbg[768];
+                swprintf(dbg, 768, L"[EFI Add] fullPath=%s devicePath=%s\n", fullPath, devicePath);
+                OutputDebugStringW(dbg);
+            }
+
+            // 检查文件是否存在
             if (GetFileAttributesW(fullPath) == INVALID_FILE_ATTRIBUTES) {
                 DWORD err = GetLastError();
                 WCHAR errMsg[640];
@@ -480,6 +616,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;
             }
 
+            // 添加到 UEFI 启动项列表
             DWORD newId = 0;
             BOOL addOk = UefiAddBootEntry(title, devicePath, fullPath, &newId);
 
@@ -515,55 +652,155 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             break;
         }
         
-        // 第二个模块的添加菜单
-        case ID_BTN_ADD_MENU:
-            RefindPageShowAddMenu(hWnd);
+        case ID_MENU_ADD_WIM: {
+            // 根据当前页面决定添加到哪里
+            if (g_currentPage == 1) {
+                // rEFInd 页面 - 添加到 rEFInd menuentry
+                RefindPageAddWim(hWnd);
+            } else {
+                // 其他页面 - 添加到 BCD
+                WCHAR wimPath[MAX_PATH] = {0};
+                if (!WimSelectFileDialog(hWnd, wimPath, MAX_PATH)) break;
+                
+                WCHAR defaultName[MAX_PATH];
+                const WCHAR* lastNameSep = wcsrchr(wimPath, L'\\');
+                if (lastNameSep) {
+                    wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
+                    WCHAR* dot = wcschr(defaultName, L'.');
+                    if (dot) *dot = L'\0';
+                } else {
+                    wcsncpy(defaultName, L"Windows PE", MAX_PATH);
+                }
+                
+                SetStatus(L"⏳ 正在添加 WIM 菜单项...");
+                if (WimAddBootEntry(defaultName, wimPath, L"1")) {
+                    WCHAR msg[MAX_PATH + 64];
+                    swprintf(msg, MAX_PATH + 64, L"WIM 菜单项添加成功!\n\n名称：%s\n路径：%s", defaultName, wimPath);
+                    MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
+                    SetStatus(L"✓ WIM 菜单项已添加");
+                    RefreshBootList();
+                } else {
+                    MessageBoxW(hWnd, L"WIM 菜单项添加失败", L"错误", MB_OK | MB_ICONERROR);
+                    SetStatus(L"✗ 添加失败");
+                }
+            }
             break;
+        }
         
-        case ID_MENU_ADD_WIM:
-            RefindPageAddWim(hWnd);
+        // 菜单项处理 - 添加 VHD 启动
+        case ID_MENU_ADD_VHD: {
+            // 根据当前页面决定添加到哪里
+            if (g_currentPage == 1) {
+                // rEFInd 页面 - 添加到 rEFInd menuentry
+                RefindPageAddVhd(hWnd);
+            } else {
+                // 其他页面 - 添加到 BCD
+                WCHAR vhdPath[MAX_PATH] = {0};
+                if (!VhdSelectFileDialog(hWnd, vhdPath, MAX_PATH)) break;
+                
+                WCHAR defaultName[MAX_PATH];
+                const WCHAR* lastNameSep = wcsrchr(vhdPath, L'\\');
+                if (lastNameSep) {
+                    wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
+                    WCHAR* dot = wcschr(defaultName, L'.');
+                    if (dot) *dot = L'\0';
+                } else {
+                    wcsncpy(defaultName, L"VHD Windows", MAX_PATH);
+                }
+                
+                SetStatus(L"⏳ 正在添加 VHD 菜单项...");
+                if (VhdAddBootEntry(defaultName, vhdPath)) {
+                    WCHAR msg[MAX_PATH + 64];
+                    swprintf(msg, MAX_PATH + 64, L"VHD 菜单项添加成功!\n\n名称：%s\n路径：%s", defaultName, vhdPath);
+                    MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
+                    SetStatus(L"✓ VHD 菜单项已添加");
+                    RefreshBootList();
+                } else {
+                    MessageBoxW(hWnd, L"VHD 菜单项添加失败", L"错误", MB_OK | MB_ICONERROR);
+                    SetStatus(L"✗ 添加失败");
+                }
+            }
             break;
-        
-        case ID_MENU_ADD_VHD:
-            RefindPageAddVhd(hWnd);
-            break;
+        }
             
         case ID_BTN_INSTALL: {
+            SetStatus(L"⏳ 正在准备安装...");
+            UpdateWindow(hWnd);
+            
+            // 临时挂载 ESP
+            WCHAR espDrive[4] = {0};
+            if (!MountESP(espDrive)) {
+                MessageBoxW(hWnd, 
+                    L"ESP 分区挂载失败\n\n"
+                    L"可能原因：\n"
+                    L"1. 程序未以管理员身份运行\n"
+                    L"2. 系统未使用 UEFI 启动模式\n"
+                    L"3. ESP 分区不存在或已损坏\n\n"
+                    L"请右键程序选择「以管理员身份运行」",
+                    L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 挂载失败");
+                break;
+            }
+
             SetStatus(L"⏳ 正在安装 rEFInd...");
             UpdateWindow(hWnd);
 
             // 检查源文件
             WCHAR resolvedSourcePath[MAX_PATH];
             if (!ResolveRefindSourcePath(resolvedSourcePath, MAX_PATH)) {
+                UnmountESP(espDrive[0]);
                 MessageBoxW(hWnd, 
                     L"未找到 rEFInd 源文件\n\n"
-                    L"请将 rEFInd 文件夹放入程序目录，\n"
+                    L"搜索路径：\n"
+                    L"• <程序目录>\\refind\n"
+                    L"• <程序目录>\\dist\\refind\n"
+                    L"• <程序目录>\\..\\refind\n"
+                    L"• <程序目录>\\..\\..\\refind\n"
+                    L"• Z:\\refind\n"
+                    L"• .\\refind\n\n"
+                    L"请将 rEFInd 文件夹放入以上任一路径，\n"
                     L"确保包含 refind_x64.efi 文件。",
                     L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 源文件缺失");
                 break;
             }
 
-            // 安装（内部自动处理 ESP 挂载）
-            BOOL success = RefindInstall(resolvedSourcePath, NULL);
+            BOOL success = RefindInstall(resolvedSourcePath, espDrive);
+
+            {
+                WCHAR dbg[MAX_PATH + 64];
+                swprintf(dbg, MAX_PATH + 64, L"[rEFInd] Install result=%d source=%s esp=%s\n",
+                    success, resolvedSourcePath, espDrive);
+                OutputDebugStringW(dbg);
+            }
 
             if (success) {
                 MessageBoxW(hWnd, 
                     L"rEFInd 安装成功！\n\n"
-                    L"重启后将显示 rEFInd 启动菜单。",
+                    L"重启后将显示 rEFInd 启动菜单。\n\n"
+                    L"如需添加自定义启动项，请在「启动项管理」\n"
+                    L"页面点击「添加引导」→「添加 EFI 菜单项」",
                     L"安装完成", MB_OK | MB_ICONINFORMATION);
                 SetStatus(L"✓ rEFInd 安装成功");
+                // 禁用安装按钮，防止重复安装
+                RefindPageSetInstalled(TRUE);
             } else {
                 const WCHAR* err = RefindGetLastErrorMessage();
                 WCHAR failMsg[1024];
                 swprintf(failMsg, 1024, 
                     L"安装失败\n\n"
                     L"错误: %s\n\n"
+                    L"可能原因：\n"
+                    L"1. ESP 分区空间不足\n"
+                    L"2. 文件被其他程序锁定\n"
+                    L"3. 权限不足\n\n"
                     L"请确保以管理员身份运行本程序。",
                     (err && wcslen(err) > 0) ? err : L"未知错误");
                 MessageBoxW(hWnd, failMsg, L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 安装失败");
             }
+
+            UnmountESP(espDrive[0]);
             break;
         }
         
@@ -573,13 +810,22 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             
             SetStatus(L"⏳ 正在卸载...");
             UpdateWindow(hWnd);
+            
+            // 临时挂载 ESP
+            WCHAR espDrive[4] = {0};
+            if (!MountESP(espDrive)) {
+                MessageBoxW(hWnd, L"ESP 分区挂载失败", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 挂载失败");
+                break;
+            }
 
-            // 卸载（内部自动处理 ESP 挂载）
-            BOOL success = RefindUninstall(NULL);
+            BOOL success = RefindUninstall(espDrive);
             
             if (success) {
                 MessageBoxW(hWnd, L"rEFInd 已卸载\n\n将恢复 Windows 引导。", L"完成", MB_OK | MB_ICONINFORMATION);
                 SetStatus(L"✓ 卸载成功");
+                // 重新启用安装按钮
+                RefindPageSetInstalled(FALSE);
             } else {
                 const WCHAR* err = RefindGetLastErrorMessage();
                 WCHAR failMsg[1024];
@@ -587,6 +833,8 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 MessageBoxW(hWnd, failMsg, L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 卸载失败");
             }
+
+            UnmountESP(espDrive[0]);
             break;
         }
 
@@ -594,16 +842,46 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             RefindPageDeleteSelected(hWnd);
             break;
         
+        case 2701:  // ID_BTN_REFRESH
+        case 2702:  // ID_BTN_DELETE
+        case 2703:  // ID_BTN_SET_DEFAULT
+        case 2704:  // ID_BTN_ADD
+        case 2705:  // ID_BTN_MBR_MODE
+        case 2801:  // ID_MENU_WIM
+        case 2802:  // ID_MENU_VHD
+        case 2803:  // ID_MENU_RAM
+        case 2804:  // ID_MENU_WINPE
+        case 2805:  // ID_MENU_ESD
+        case 2806:  // ID_MENU_ISO
+            BcdPageCommand(hWnd, wParam);
+            break;
+        
         case ID_BTN_BACKUP_MBR: {
             SYSTEMTIME st; GetLocalTime(&st);
-            WCHAR file[MAX_PATH];
-            CreateDirectoryW(L"C:\\BootBackups", NULL);
-            swprintf(file, MAX_PATH, L"C:\\BootBackups\\MBR_%04d%02d%02d.bin", st.wYear, st.wMonth, st.wDay);
-            SetStatus(L"⏳ 备份中...");
+            WCHAR backupDir[MAX_PATH] = {0};
+            WCHAR file[MAX_PATH] = {0};
+            
+            // 获取程序目录下的 backups 文件夹
+            if (!BackupGetBackupDir(backupDir, MAX_PATH)) {
+                MessageBoxW(hWnd, L"无法创建备份目录", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"✗ 备份失败");
+                break;
+            }
+            
+            swprintf(file, MAX_PATH, L"%s\\MBR_%04d%02d%02d_%02d%02d%02d.bin",
+                backupDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+            
+            SetStatus(L"⏳ 备份 MBR 中...");
+            
             if (BackupMBR(L"PhysicalDrive0", file)) {
-                WCHAR msg[MAX_PATH]; swprintf(msg, MAX_PATH, L"备份成功:\n%s", file);
-                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ MBR 已备份");
+                WCHAR msg[MAX_PATH + 128];
+                swprintf(msg, MAX_PATH + 128, 
+                    L"MBR 备份成功！\n\n"
+                    L"备份位置:\n%s\n\n"
+                    L"提示：备份文件保存在程序目录的 backups 文件夹中。",
+                    file);
+                MessageBoxW(hWnd, msg, L"备份成功", MB_OK | MB_ICONINFORMATION);
+                SetStatus(L"✓ MBR 已备份到 backups 文件夹");
             } else {
                 MessageBoxW(hWnd, L"备份失败，需要管理员权限", L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 备份失败");
@@ -613,31 +891,29 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         
         case ID_BTN_BACKUP_BCD: {
             SYSTEMTIME st; GetLocalTime(&st);
-            WCHAR file[MAX_PATH];
-            CreateDirectoryW(L"C:\\BootBackups", NULL);
-            swprintf(file, MAX_PATH, L"C:\\BootBackups\\BCD_%04d%02d%02d.bak", st.wYear, st.wMonth, st.wDay);
-            SetStatus(L"⏳ 备份中...");
-            if (BackupBCD(file)) {
-                WCHAR msg[MAX_PATH]; swprintf(msg, MAX_PATH, L"备份成功:\n%s", file);
-                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ BCD 已备份");
-            } else {
-                MessageBoxW(hWnd, L"备份失败，需要管理员权限", L"错误", MB_OK | MB_ICONERROR);
+            WCHAR backupDir[MAX_PATH] = {0};
+            WCHAR file[MAX_PATH] = {0};
+            
+            if (!BackupGetBackupDir(backupDir, MAX_PATH)) {
+                MessageBoxW(hWnd, L"无法创建备份目录", L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 备份失败");
+                break;
             }
-            break;
-        }
-        
-        case ID_BTN_BACKUP_NV: {
-            SYSTEMTIME st; GetLocalTime(&st);
-            WCHAR file[MAX_PATH];
-            CreateDirectoryW(L"C:\\BootBackups", NULL);
-            swprintf(file, MAX_PATH, L"C:\\BootBackups\\NVRAM_%04d%02d%02d.bak", st.wYear, st.wMonth, st.wDay);
-            SetStatus(L"⏳ 备份中...");
-            if (UefiExportNVRAM(file)) {
-                WCHAR msg[MAX_PATH]; swprintf(msg, MAX_PATH, L"备份成功:\n%s", file);
-                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ NVRAM 已备份");
+            
+            swprintf(file, MAX_PATH, L"%s\\BCD_%04d%02d%02d_%02d%02d%02d.bak",
+                backupDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+            
+            SetStatus(L"⏳ 备份 BCD 中...");
+            
+            if (BackupBCD(file)) {
+                WCHAR msg[MAX_PATH + 128];
+                swprintf(msg, MAX_PATH + 128, 
+                    L"BCD 备份成功！\n\n"
+                    L"备份位置:\n%s\n\n"
+                    L"提示：备份文件保存在程序目录的 backups 文件夹中。",
+                    file);
+                MessageBoxW(hWnd, msg, L"备份成功", MB_OK | MB_ICONINFORMATION);
+                SetStatus(L"✓ BCD 已备份到 backups 文件夹");
             } else {
                 MessageBoxW(hWnd, L"备份失败，需要管理员权限", L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 备份失败");
@@ -679,19 +955,6 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             break;
         }
-
-        case ID_BTN_REPAIR:
-            if (MessageBoxW(hWnd, L"确定运行启动修复？\n\n将执行 bootrec 系列命令。", L"确认", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-                SetStatus(L"⏳ 修复中...");
-                if (RepairBootRec(NULL)) {
-                    MessageBoxW(hWnd, L"启动修复完成", L"完成", MB_OK | MB_ICONINFORMATION);
-                    SetStatus(L"✓ 修复完成");
-                } else {
-                    MessageBoxW(hWnd, L"修复失败", L"错误", MB_OK | MB_ICONERROR);
-                    SetStatus(L"✗ 修复失败");
-                }
-            }
-            break;
 
         case ID_BTN_MBR_REPAIR: {
             if (MessageBoxW(hWnd,
@@ -810,36 +1073,89 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         
         // UEFI 启动项管理
         case ID_BTN_DELETE_ENTRY: {
-            if (!g_hListView) break;
+            if (!g_hListView || !g_bootList) break;
+            
             int sel = ListView_GetNextItem(g_hListView, -1, LVNI_SELECTED);
             if (sel == -1) {
                 MessageBoxW(hWnd, L"请先选择一个启动项", L"提示", MB_OK | MB_ICONINFORMATION);
                 break;
             }
             
-            // 从第 1 列读取 ID（第 0 列是序号）
             WCHAR idText[16] = {0};
-            ListView_GetItemText(g_hListView, sel, 1, idText, 16);
-            DWORD id = wcstoul(idText, NULL, 16);
-            
-            // 从第 2 列读取名称
             WCHAR name[256] = {0};
-            ListView_GetItemText(g_hListView, sel, 2, name, 256);
-            
+            WCHAR efiPath[512] = {0};
             WCHAR msg[512];
+            DWORD id;
+            UEFI_BOOT_ENTRY_WRAPPER* entry;
+            BOOL deleted;
+            WCHAR* efiStart;
+            WCHAR* slash;
+            int len;
+            WCHAR dirName[64] = {0};
+            WCHAR espDrive[4] = {0};
+            WCHAR delDir[MAX_PATH];
+            WCHAR cmd[MAX_PATH];
+            
+            ListView_GetItemText(g_hListView, sel, 0, idText, 16);
+            id = wcstoul(idText, NULL, 16);
+            
+            // 从 g_bootList 获取路径
+            entry = g_bootList->entries;
+            while (entry) {
+                if (entry->id == id) {
+                    wcsncpy(efiPath, entry->filePath, 511);
+                    break;
+                }
+                entry = entry->next;
+            }
+            
+            ListView_GetItemText(g_hListView, sel, 1, name, 256);
+            
             swprintf(msg, 512, L"确定删除启动项？\n\n名称：%s\nID: %04X", name, id);
             
-            if (MessageBoxW(hWnd, msg, L"确认删除", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-                SetStatus(L"⏳ 正在删除...");
-                if (UefiDeleteBootEntry(id)) {
-                    MessageBoxW(hWnd, L"启动项已删除", L"完成", MB_OK | MB_ICONINFORMATION);
-                    SetStatus(L"✓ 已删除");
-                    RefreshBootList();
-                } else {
-                    MessageBoxW(hWnd, L"删除失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
-                    SetStatus(L"✗ 删除失败");
+            if (MessageBoxW(hWnd, msg, L"确认删除", MB_YESNO | MB_ICONQUESTION) != IDYES) break;
+            
+            SetStatus(L"正在删除...");
+            
+            // 删除 NVRAM 启动项
+            deleted = UefiDeleteBootEntry(id);
+            
+            if (!deleted) {
+                MessageBoxW(hWnd, L"删除失败\n\n请以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
+                SetStatus(L"删除失败");
+                break;
+            }
+            
+            // 检查是否需要删除 ESP 上的文件（\EFI\xxx\ 格式表示用户添加的）
+            if (efiPath[0] == L'\\' && wcsncmp(efiPath, L"\\EFI\\", 5) == 0) {
+                efiStart = efiPath + 5;
+                slash = wcschr(efiStart, L'\\');
+                if (slash) {
+                    len = (int)(slash - efiStart);
+                    // 排除系统目录（Microsoft, BOOT, refind 等）
+                    if (len > 0 && len < 64) {
+                        wcsncpy(dirName, efiStart, len);
+                        dirName[len] = L'\0';
+                        
+                        // 只删除非系统目录（用户自己添加的）
+                        if (_wcsicmp(dirName, L"Microsoft") != 0 && 
+                            _wcsicmp(dirName, L"BOOT") != 0 &&
+                            _wcsicmp(dirName, L"refind") != 0) {
+                            // 挂载 ESP 并删除目录
+                            if (MountESP(espDrive)) {
+                                swprintf(delDir, MAX_PATH, L"%s\\EFI\\%s", espDrive, dirName);
+                                swprintf(cmd, MAX_PATH, L"cmd /c rd /s /q \"%s\"", delDir);
+                                _wsystem(cmd);
+                                UnmountESP(espDrive[0]);
+                            }
+                        }
+                    }
                 }
             }
+            
+            MessageBoxW(hWnd, L"启动项已删除", L"完成", MB_OK | MB_ICONINFORMATION);
+            SetStatus(L"已删除");
+            RefreshBootList();
             break;
         }
         
@@ -852,9 +1168,8 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;
             }
 
-            // 从第 1 列读取 ID（第 0 列是序号）
             WCHAR idText[16] = {0};
-            ListView_GetItemText(g_hListView, sel, 1, idText, 16);
+            ListView_GetItemText(g_hListView, sel, 0, idText, 16);
             DWORD id = wcstoul(idText, NULL, 16);
 
             SetStatus((LOWORD(wParam) == ID_BTN_MOVE_UP) ? L"⏳ 正在上移..." : L"⏳ 正在下移...");
@@ -865,12 +1180,6 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (ok) {
                 SetStatus(L"✓ BootOrder 已更新");
                 RefreshBootList();
-                // 选中移动后的项
-                int newSel = (LOWORD(wParam) == ID_BTN_MOVE_UP) ? sel - 1 : sel + 1;
-                if (newSel >= 0 && newSel < ListView_GetItemCount(g_hListView)) {
-                    ListView_SetItemState(g_hListView, newSel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                    ListView_EnsureVisible(g_hListView, newSel, FALSE);
-                }
             } else {
                 MessageBoxW(hWnd, L"调整顺序失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 调整失败");
@@ -886,14 +1195,12 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;
             }
             
-            // 从第 1 列读取 ID（第 0 列是序号）
             WCHAR idText[16] = {0};
-            ListView_GetItemText(g_hListView, sel, 1, idText, 16);
+            ListView_GetItemText(g_hListView, sel, 0, idText, 16);
             DWORD id = wcstoul(idText, NULL, 16);
             
-            // 从第 2 列读取名称
             WCHAR name[256] = {0};
-            ListView_GetItemText(g_hListView, sel, 2, name, 256);
+            ListView_GetItemText(g_hListView, sel, 1, name, 256);
             
             SetStatus(L"⏳ 正在设置默认...");
             if (UefiSetDefaultBootEntry(g_bootList, id)) {
@@ -901,7 +1208,6 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 swprintf(msg, 256, L"已设置默认启动项:\n%s", name);
                 MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
                 SetStatus(L"✓ 已设为默认");
-                RefreshBootList();
             } else {
                 MessageBoxW(hWnd, L"设置失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
                 SetStatus(L"✗ 设置失败");
@@ -971,19 +1277,27 @@ static void CreateNavigation(HWND hWnd)
     
     // 导航项
     struct { int id; const WCHAR* text; } items[] = {
-        { ID_NAV_UEFI, L"启动项管理" },
+        { ID_NAV_UEFI, L"UEFI 管理" },
+        { ID_NAV_MBR, L"MBR 管理" },
         { ID_NAV_REFIND, L"rEFInd 管理" },
+        { ID_NAV_BCD, L"BCD 菜单" },
         { ID_NAV_BACKUP, L"高级功能" },
         { ID_NAV_ABOUT, L"关于" }
     };
     
+    BOOL isUEFI = BootMode_IsUEFIFirmware();
+    
     int y = 100;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 6; i++) {
         g_navItems[i] = CreateWindowExW(0, L"BUTTON", items[i].text,
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
             16, y, SIDEBAR_WIDTH - 32, NAV_ITEM_HEIGHT,
             hWnd, (HMENU)(UINT_PTR)items[i].id, NULL, NULL);
         SendMessageW(g_navItems[i], WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+        // MBR 管理在 UEFI 模式下灰色
+        if (items[i].id == ID_NAV_MBR && isUEFI) {
+            EnableWindow(g_navItems[i], FALSE);
+        }
         y += NAV_ITEM_HEIGHT + 8;
     }
 }
@@ -1029,9 +1343,11 @@ static void SwitchPage(int page)
     
     switch (page) {
         case 0: BuildUEFIPage(g_hContent); break;
-        case 1: BuildRefindPage(g_hContent); break;
-        case 2: BuildAdvancedPage(g_hContent); break;
-        case 3: BuildAboutPage(g_hContent); break;
+        case 1: BuildMBRPage(g_hContent); break;
+        case 2: BuildRefindPage(g_hContent); break;
+        case 3: BcdPageBuild(g_hContent, g_fontTitle, g_fontBody, g_fontSmall); break;
+        case 4: BuildAdvancedPage(g_hContent); break;
+        case 5: BuildAboutPage(g_hContent); break;
     }
 }
 
@@ -1044,7 +1360,7 @@ static void BuildUEFIPage(HWND hParent)
     int w = rc.right - CONTENT_PADDING * 2;
     int h = rc.bottom;
 
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"启动项管理",
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"UEFI 管理",
         WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING, w, 32,
         hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
@@ -1056,10 +1372,9 @@ static void BuildUEFIPage(HWND hParent)
     ListView_SetExtendedListViewStyle(g_hListView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
     LVCOLUMN lvc = {0}; lvc.mask = LVCF_TEXT | LVCF_WIDTH;
-    lvc.pszText = L"序号"; lvc.cx = 50; ListView_InsertColumn(g_hListView, 0, &lvc);
-    lvc.pszText = L"ID"; lvc.cx = 70; ListView_InsertColumn(g_hListView, 1, &lvc);
-    lvc.pszText = L"名称"; lvc.cx = 220; ListView_InsertColumn(g_hListView, 2, &lvc);
-    lvc.pszText = L"路径"; lvc.cx = w - 360; ListView_InsertColumn(g_hListView, 3, &lvc);
+    lvc.pszText = L"ID"; lvc.cx = 80; ListView_InsertColumn(g_hListView, 0, &lvc);
+    lvc.pszText = L"名称"; lvc.cx = 240; ListView_InsertColumn(g_hListView, 1, &lvc);
+    lvc.pszText = L"路径"; lvc.cx = w - 340; ListView_InsertColumn(g_hListView, 2, &lvc);
 
     RefreshBootList();
 
@@ -1067,7 +1382,7 @@ static void BuildUEFIPage(HWND hParent)
     #define BTN(id, text, wd) CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE, bx, by, wd, BTN_HEIGHT, hParent, (HMENU)id, NULL, NULL); SendMessageW(GetDlgItem(hParent, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); bx += wd + 10;
 
     BTN(ID_BTN_REFRESH, L"🔄 刷新", 90);
-    BTN(ID_BTN_ADD_ENTRY, L"➕ 添加 EFI", 120);
+    BTN(ID_BTN_ADD_ENTRY, L"➕ 添加 EFI", 100);
     BTN(ID_BTN_DELETE_ENTRY, L"🗑 删除", 90);
     BTN(ID_BTN_MOVE_UP, L"↑ 上移", 70);
     BTN(ID_BTN_MOVE_DOWN, L"↓ 下移", 70);
@@ -1078,6 +1393,43 @@ static void BuildUEFIPage(HWND hParent)
     g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪",
         WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 30, w, 24, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
     SendMessageW(g_hStatusText, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+}
+
+// ============================================
+// MBR 管理页面
+// ============================================
+static void BuildMBRPage(HWND hParent)
+{
+    RECT rc; GetClientRect(hParent, &rc);
+    int w = rc.right - CONTENT_PADDING * 2;
+    int h = rc.bottom;
+
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"MBR 管理",
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING, w, 32,
+        hParent, NULL, NULL, NULL);
+    SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
+
+    // 提示信息
+    HWND hInfo = CreateWindowExW(0, L"STATIC",
+        L"当前系统识别为 UEFI 启动模式，MBR 管理功能不可用。\n\n"
+        L"MBR 管理适用于传统 BIOS/Legacy 启动模式的系统。\n\n"
+        L"如果您需要使用 MBR 功能，请在 BIOS 设置中切换启动模式，\n"
+        L"或使用支持传统启动的 PE 环境运行本程序。",
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING + 50, w, 120,
+        hParent, NULL, NULL, NULL);
+    SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+
+    // 图标
+    HWND hIcon = CreateWindowExW(0, L"STATIC", L"ℹ",
+        WS_CHILD | WS_VISIBLE | SS_CENTER, CONTENT_PADDING + 20, CONTENT_PADDING + 180, 40, 40,
+        hParent, NULL, NULL, NULL);
+    SendMessageW(hIcon, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
+
+    HWND hNote = CreateWindowExW(0, L"STATIC",
+        L"提示：UEFI 启动模式下，请使用「UEFI 管理」或「rEFInd 管理」",
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING + 70, CONTENT_PADDING + 190, w - 100, 24,
+        hParent, NULL, NULL, NULL);
+    SendMessageW(hNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
 // ============================================
@@ -1093,54 +1445,6 @@ static void RefreshRefindMenuList(void)
     RefindPageRefresh();
 }
 // ============================================
-static void BuildBackupPage(HWND hParent)
-{
-    RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right - CONTENT_PADDING * 2;
-    int h = rc.bottom;
-    
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"备份与修复",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING, w, 32,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-    
-    // 备份卡片
-    HWND hCard1 = CreateWindowExW(0, L"BUTTON", L" 创建备份",
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        CONTENT_PADDING, CONTENT_PADDING + 50, w, 120,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hCard1, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    
-    int bx = CONTENT_PADDING + 20, by = CONTENT_PADDING + 90;
-    #define BTN(id, text, w) CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE, bx, by, w, BTN_HEIGHT, hParent, (HMENU)id, NULL, NULL); SendMessageW(GetDlgItem(hParent, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); bx += w + 15;
-    
-    BTN(ID_BTN_BACKUP_MBR, L"💿 备份 MBR", 120);
-    BTN(ID_BTN_BACKUP_BCD, L"📁 备份 BCD", 120);
-    BTN(ID_BTN_BACKUP_NV, L"💾 备份 NVRAM", 130);
-    
-    // 修复卡片
-    HWND hCard2 = CreateWindowExW(0, L"BUTTON", L" 系统修复",
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        CONTENT_PADDING, CONTENT_PADDING + 190, w, 100,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hCard2, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    
-    bx = CONTENT_PADDING + 20; by = CONTENT_PADDING + 230;
-    BTN(ID_BTN_RESTORE, L"📤 恢复备份", 120);
-    BTN(ID_BTN_REPAIR, L"🔧 修复启动", 120);
-    
-    #undef BTN
-    
-    HWND hNote = CreateWindowExW(0, L"STATIC",
-        L"⚠️ 操作需要管理员权限，修改前建议先备份",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 80, w, 24, hParent, NULL, NULL, NULL);
-    SendMessageW(hNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
-    
-    g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 30, w, 24, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
-    SendMessageW(g_hStatusText, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
-}
-
 // ============================================
 // 高级功能页面
 // ============================================
@@ -1155,51 +1459,69 @@ static void BuildAdvancedPage(HWND hParent)
         hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
 
-    /* MBR 修复卡片 */
+    // ========== 备份卡片 ==========
+    HWND hCard0 = CreateWindowExW(0, L"BUTTON", L" 备份与恢复",
+        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        CONTENT_PADDING, CONTENT_PADDING + 50, w, 100,
+        hParent, NULL, NULL, NULL);
+    SendMessageW(hCard0, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+
+    int bx = CONTENT_PADDING + 20, by = CONTENT_PADDING + 85;
+    #define BTN(id, text, wd) \
+        CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE, bx, by, wd, BTN_HEIGHT, hParent, (HMENU)id, NULL, NULL); \
+        SendMessageW(GetDlgItem(hParent, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); \
+        bx += wd + 12;
+
+    BTN(ID_BTN_BACKUP_MBR, L"备份 MBR", 90);
+    BTN(ID_BTN_BACKUP_BCD, L"备份 BCD", 90);
+    bx = CONTENT_PADDING + 20; by += 40;
+    BTN(ID_BTN_RESTORE, L"恢复备份", 90);
+
+    #undef BTN
+
+    // ========== MBR 修复卡片 ==========
     HWND hCard1 = CreateWindowExW(0, L"BUTTON", L" MBR 修复",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        CONTENT_PADDING, CONTENT_PADDING + 50, w, 130,
+        CONTENT_PADDING, CONTENT_PADDING + 165, w, 100,
         hParent, NULL, NULL, NULL);
     SendMessageW(hCard1, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
 
     HWND hDesc1 = CreateWindowExW(0, L"STATIC",
-        L"恢复 Windows 默认 MBR 引导代码（前 446 字节），保留分区表不变。\n"
-        L"适用于 MBR 被第三方引导程序覆盖的情况。",
+        L"恢复 Windows 默认 MBR 引导代码，保留分区表不变。",
         WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + 16, CONTENT_PADDING + 78, w - 32, 36,
+        CONTENT_PADDING + 16, CONTENT_PADDING + 193, w - 32, 24,
         hParent, NULL, NULL, NULL);
     SendMessageW(hDesc1, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 
-    HWND hBtnMbr = CreateWindowExW(0, L"BUTTON", L"🔧 修复 MBR",
+    HWND hBtnMbr = CreateWindowExW(0, L"BUTTON", L"修复 MBR",
         WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + 16, CONTENT_PADDING + 122, 130, BTN_HEIGHT,
+        CONTENT_PADDING + 16, CONTENT_PADDING + 225, 100, BTN_HEIGHT,
         hParent, (HMENU)ID_BTN_MBR_REPAIR, NULL, NULL);
     SendMessageW(hBtnMbr, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
 
-    /* UEFI 修复卡片 */
+    // ========== UEFI 修复卡片 ==========
     HWND hCard2 = CreateWindowExW(0, L"BUTTON", L" UEFI 引导修复",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        CONTENT_PADDING, CONTENT_PADDING + 200, w, 150,
+        CONTENT_PADDING, CONTENT_PADDING + 280, w, 100,
         hParent, NULL, NULL, NULL);
     SendMessageW(hCard2, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
 
     HWND hDesc2 = CreateWindowExW(0, L"STATIC",
-        L"恢复 Windows 默认 UEFI 引导链：检查 ESP 分区，重建 \\EFI\\Microsoft\\Boot\\ 目录，\n"
-        L"并通过 bcdboot 恢复 bootmgfw.efi。如无法自动修复，将提供手动修复指引。",
+        L"重建 ESP 分区的 UEFI 引导链，恢复 bootmgfw.efi。",
         WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + 16, CONTENT_PADDING + 228, w - 32, 40,
+        CONTENT_PADDING + 16, CONTENT_PADDING + 308, w - 32, 24,
         hParent, NULL, NULL, NULL);
     SendMessageW(hDesc2, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 
-    HWND hBtnUefi = CreateWindowExW(0, L"BUTTON", L"🔧 修复 UEFI 引导",
+    HWND hBtnUefi = CreateWindowExW(0, L"BUTTON", L"修复 UEFI 引导",
         WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + 16, CONTENT_PADDING + 276, 150, BTN_HEIGHT,
+        CONTENT_PADDING + 16, CONTENT_PADDING + 340, 120, BTN_HEIGHT,
         hParent, (HMENU)ID_BTN_UEFI_REPAIR, NULL, NULL);
     SendMessageW(hBtnUefi, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
 
     HWND hWarn = CreateWindowExW(0, L"STATIC",
-        L"⚠️ 以上操作均为高风险操作，执行前请确保已备份重要数据，并以管理员身份运行本程序。",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 80, w, 24, hParent, NULL, NULL, NULL);
+        L"⚠️ 操作需要管理员权限，修改前建议先备份。",
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 60, w, 24, hParent, NULL, NULL, NULL);
     SendMessageW(hWarn, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 
     g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪",
@@ -1261,7 +1583,7 @@ static void RefreshBootList(void)
     if (g_bootList) UefiFreeBootList(g_bootList);
     g_bootList = NULL;
 
-    // 扫描 UEFI 启动项（纯 NVRAM API）
+    // 每次刷新都重新扫描固件启动项，避免外部工具修改后仍显示旧缓存
     g_bootList = UefiScanBootEntries();
     if (!g_bootList || g_bootList->count == 0) {
         if (g_bootList) {
@@ -1273,33 +1595,22 @@ static void RefreshBootList(void)
     }
 
     if (!g_bootList || g_bootList->count == 0) {
-        // 显示提示信息
         LVITEM lvi = {0}; lvi.mask = LVIF_TEXT;
-        lvi.pszText = L"-"; lvi.iItem = 0;
+        lvi.pszText = L"0001"; lvi.iItem = 0;
         ListView_InsertItem(g_hListView, &lvi);
-        ListView_SetItemText(g_hListView, 0, 1, L"未检测到 UEFI 启动项");
-        ListView_SetItemText(g_hListView, 0, 2, L"请确保以管理员身份运行");
+        ListView_SetItemText(g_hListView, 0, 1, L"Windows Boot Manager");
+        ListView_SetItemText(g_hListView, 0, 2, L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi");
         return;
     }
     
     UEFI_BOOT_ENTRY_WRAPPER* entry = g_bootList->entries;
     int idx = 0;
     while (entry) {
-        // 序号列（启动顺序）
-        WCHAR order[8]; swprintf(order, 8, L"%d", idx + 1);
-        LVITEM lvi = {0}; lvi.mask = LVIF_TEXT; lvi.iItem = idx; lvi.pszText = order;
-        ListView_InsertItem(g_hListView, &lvi);
-        
-        // ID 列
         WCHAR id[16]; swprintf(id, 16, L"%04X", entry->id);
-        ListView_SetItemText(g_hListView, idx, 1, id);
-        
-        // 名称列
-        ListView_SetItemText(g_hListView, idx, 2, entry->name);
-        
-        // 路径列
-        ListView_SetItemText(g_hListView, idx, 3, entry->filePath);
-        
+        LVITEM lvi = {0}; lvi.mask = LVIF_TEXT; lvi.iItem = idx; lvi.pszText = id;
+        ListView_InsertItem(g_hListView, &lvi);
+        ListView_SetItemText(g_hListView, idx, 1, entry->name);
+        ListView_SetItemText(g_hListView, idx, 2, entry->filePath);
         entry = entry->next; idx++;
     }
 }

@@ -23,7 +23,7 @@ echo.
 :: Compile
 gcc -municode src\ui\main.c src\ui\dialog.c src\ui\pages\*.c src\ui\dialogs\*.c ^
     src\core\*.c src\hal\*.c src\utils\*.c ^
-    -I include ^
+    -I include -I src ^
     -o dist\BootManagerPro.exe ^
     -m64 -mwindows -lcomctl32 -lcomdlg32 -lshell32 -ladvapi32 -lole32 -luuid -O2 -Wall
 

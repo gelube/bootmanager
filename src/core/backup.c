@@ -2,6 +2,56 @@
 #include <wchar.h>
 #include <time.h>
 
+// ============================================
+// 获取程序所在目录
+// ============================================
+static BOOL GetAppDir(WCHAR* buffer, DWORD size)
+{
+    if (!buffer || size == 0) return FALSE;
+    
+    if (GetModuleFileNameW(NULL, buffer, size) == 0) {
+        return FALSE;
+    }
+    
+    WCHAR* lastSlash = wcsrchr(buffer, L'\\');
+    if (lastSlash) {
+        *lastSlash = L'\0';
+    }
+    
+    return TRUE;
+}
+
+// ============================================
+// 获取备份目录（程序目录下的 backups 文件夹）
+// 返回绝对路径，如：C:\Tools\BootManager\backups\
+// ============================================
+BOOL BackupGetBackupDir(WCHAR* buffer, DWORD size)
+{
+    if (!buffer || size == 0) return FALSE;
+    
+    if (!GetAppDir(buffer, size)) {
+        return FALSE;
+    }
+    
+    size_t len = wcslen(buffer);
+    if (len + 10 >= size) return FALSE;  // 确保空间足够
+    
+    wcscat(buffer, L"\\backups");
+    
+    // 确保目录存在
+    CreateDirectoryW(buffer, NULL);
+    
+    return TRUE;
+}
+
+// ============================================
+// 获取程序所在目录（公开函数）
+// ============================================
+BOOL BackupGetAppDir(WCHAR* buffer, DWORD size)
+{
+    return GetAppDir(buffer, size);
+}
+
 // Create backup directory with timestamp
 BOOL BackupCreateDirectory(const WCHAR* path) {
     if (!path) return FALSE;

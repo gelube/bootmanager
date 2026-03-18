@@ -1,1 +1,26 @@
-nul  
+# 编译输出
+dist/
+*.exe
+*.o
+*.obj
+
+# 测试文件
+test_*.exe
+test_*.c
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln
+*.vcxproj*
+
+# 临时文件
+*.tmp
+*.log
+*~
+
+# 资源文件夹（保留README）
+limine/*
+!limine/README.txt

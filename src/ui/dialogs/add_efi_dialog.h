@@ -44,6 +44,7 @@ typedef struct {
     INT selectedDisk;       // 选中的磁盘索引
     INT selectedPartition;  // 选中的分区索引
     WCHAR filePath[512];    // 启动文件路径
+    INT_PTR result;         // 对话框结果 (IDOK/IDCANCEL)
     
     DISK_INFO* disks;       // 磁盘列表
     INT diskCount;          // 磁盘数量
