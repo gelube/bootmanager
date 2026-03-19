@@ -21,6 +21,7 @@ test_*.c
 *.log
 *~
 
-# 资源文件夹（保留README）
+# 资源文件夹（保留README和LICENSE）
 limine/*
 !limine/README.txt
+!limine/LICENSE
