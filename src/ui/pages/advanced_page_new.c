@@ -26,10 +26,8 @@ enum {
     ID_BTN_CONVERT_TO_MBR,
     ID_BTN_BACKUP_MBR,
     ID_BTN_BACKUP_NVRAM,
-    ID_BTN_BACKUP_BCD,
     ID_BTN_RESTORE,
     ID_BTN_REPAIR_UEFI,
-    ID_BTN_REPAIR_MBR,
     ID_BTN_REPAIR_PBR,
     ID_STATUS_TEXT = 500
 };
@@ -91,27 +89,6 @@ static void DoBackupNVRAM(HWND hWnd)
     }
 }
 
-static void DoBackupBCD(HWND hWnd)
-{
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    WCHAR file[MAX_PATH];
-    CreateDirectoryW(L"C:\\BootBackups", NULL);
-    swprintf(file, MAX_PATH, L"C:\\BootBackups\\BCD_%04d%02d%02d.bak",
-        st.wYear, st.wMonth, st.wDay);
-
-    SetStatus(L"正在备份 BCD...");
-    if (BackupBCD(file)) {
-        WCHAR msg[MAX_PATH];
-        swprintf(msg, MAX_PATH, L"BCD 备份成功：\n%s", file);
-        MessageBoxW(hWnd, msg, L"备份完成", MB_OK | MB_ICONINFORMATION);
-        SetStatus(L"BCD 已备份");
-    } else {
-        MessageBoxW(hWnd, L"备份失败，需要管理员权限。", L"错误", MB_OK | MB_ICONERROR);
-        SetStatus(L"备份失败");
-    }
-}
-
 static BOOL BrowseBackupFile(HWND hWnd, WCHAR* filePath, DWORD size)
 {
     OPENFILENAMEW ofn = {0};
@@ -167,28 +144,6 @@ static void DoRepairUEFI(HWND hWnd)
     }
 }
 
-static void DoRepairMBR(HWND hWnd)
-{
-    if (MessageBoxW(hWnd,
-        L"此操作将恢复 Windows 默认 MBR 引导代码，不会影响分区表。\n\n"
-        L"高风险操作，请确保已备份重要数据！\n\n确定继续？",
-        L"MBR 修复确认", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-
-    SetStatus(L"正在修复 MBR...");
-
-    if (RepairMBR_Native(0)) {
-        MessageBoxW(hWnd, L"MBR 引导代码已成功写入。\n\n请重启计算机验证修复结果。",
-            L"MBR 修复成功", MB_OK | MB_ICONINFORMATION);
-        SetStatus(L"MBR 修复完成");
-    } else {
-        DWORD err = GetLastError();
-        WCHAR msg[256];
-        swprintf(msg, 256, L"MBR 修复失败（错误码：%lu）。\n\n请确保以管理员身份运行。", err);
-        MessageBoxW(hWnd, msg, L"MBR 修复失败", MB_OK | MB_ICONERROR);
-        SetStatus(L"MBR 修复失败");
-    }
-}
-
 // ============================================
 // 页面构建
 // ============================================
@@ -236,12 +191,6 @@ void AdvancedPageNew_Build(HWND hParent, HFONT fontTitle, HFONT fontBody, HFONT 
             CONTENT_PADDING + CARD_PADDING + 100, btnY1, 100, BTN_HEIGHT,
             hParent, (HMENU)ID_BTN_BACKUP_NVRAM, NULL, NULL);
         SendMessageW(hBtnBackupNVRAM, WM_SETFONT, (WPARAM)fontBody, TRUE);
-
-        HWND hBtnBackupBCD = CreateWindowExW(0, L"BUTTON", L"备份 BCD",
-            WS_CHILD | WS_VISIBLE,
-            CONTENT_PADDING + CARD_PADDING + 210, btnY1, 90, BTN_HEIGHT,
-            hParent, (HMENU)ID_BTN_BACKUP_BCD, NULL, NULL);
-        SendMessageW(hBtnBackupBCD, WM_SETFONT, (WPARAM)fontBody, TRUE);
     }
 
     HWND hBtnRestore = CreateWindowExW(0, L"BUTTON", L"恢复备份",
@@ -266,17 +215,14 @@ void AdvancedPageNew_Build(HWND hParent, HFONT fontTitle, HFONT fontBody, HFONT 
             CONTENT_PADDING + CARD_PADDING, btnY2, 100, BTN_HEIGHT,
             hParent, (HMENU)ID_BTN_REPAIR_UEFI, NULL, NULL);
         SendMessageW(hBtnRepairUEFI, WM_SETFONT, (WPARAM)fontBody, TRUE);
+        
+        // UEFI 模式下不显示 MBR 修复（MBR 管理页面有）
     }
-
-    HWND hBtnRepairMBR = CreateWindowExW(0, L"BUTTON", L"MBR 修复",
-        WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + CARD_PADDING + 110, btnY2, 100, BTN_HEIGHT,
-        hParent, (HMENU)ID_BTN_REPAIR_MBR, NULL, NULL);
-    SendMessageW(hBtnRepairMBR, WM_SETFONT, (WPARAM)fontBody, TRUE);
-
+    
+    // PBR 修复（所有模式都可用）
     HWND hBtnRepairPBR = CreateWindowExW(0, L"BUTTON", L"PBR 修复",
         WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + CARD_PADDING + 220, btnY2, 100, BTN_HEIGHT,
+        CONTENT_PADDING + CARD_PADDING + (s_bootInfo.isUEFIFirmware ? 110 : 0), btnY2, 100, BTN_HEIGHT,
         hParent, (HMENU)ID_BTN_REPAIR_PBR, NULL, NULL);
     SendMessageW(hBtnRepairPBR, WM_SETFONT, (WPARAM)fontBody, TRUE);
 
@@ -313,17 +259,11 @@ BOOL AdvancedPageNew_OnCommand(HWND hWnd, WPARAM wParam, LPARAM lParam)
         case ID_BTN_BACKUP_NVRAM:
             DoBackupNVRAM(hWnd);
             return TRUE;
-        case ID_BTN_BACKUP_BCD:
-            DoBackupBCD(hWnd);
-            return TRUE;
         case ID_BTN_RESTORE:
             DoRestore(hWnd);
             return TRUE;
         case ID_BTN_REPAIR_UEFI:
             DoRepairUEFI(hWnd);
-            return TRUE;
-        case ID_BTN_REPAIR_MBR:
-            DoRepairMBR(hWnd);
             return TRUE;
         case ID_BTN_REPAIR_PBR:
             MessageBoxW(hWnd, L"PBR 修复功能正在完善中。", L"提示", MB_OK | MB_ICONINFORMATION);

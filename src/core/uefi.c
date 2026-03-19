@@ -5,6 +5,7 @@
 
 #include "uefi.h"
 #include "../../include/uefi_nvram.h"
+#include "../../include/esp.h"
 #include <wchar.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,7 +63,14 @@ UEFI_BOOT_LIST* UefiScanBootEntries(void) {
     if (!list) return NULL;
     
     // 获取 BootOrder
-    if (!UefiNvramGetBootOrder(&bo) || bo.Count == 0) {
+    if (!UefiNvramGetBootOrder(&bo)) {
+        // 无法获取 BootOrder，返回空列表（不是 NULL）
+        return list;
+    }
+    
+    if (bo.Count == 0) {
+        // BootOrder 为空，释放并返回空列表
+        UefiNvramFreeBootOrder(&bo);
         return list;
     }
     
@@ -197,31 +205,84 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
         wcsncpy(efiPath, filePath, 511);
     }
     
+    // 获取当前 BootOrder
+    UEFI_BOOT_ORDER bo = {0};
+    UefiNvramGetBootOrder(&bo);
+    
     // 找一个空闲的 BootXXXX 槽位
-    UINT16 bootNum = 0x0001;
-    for (UINT32 n = 1; n <= 0x00FF; n++) {
-        UEFI_BOOT_ENTRY* existing = UefiNvramGetBootEntry((UINT16)n);
-        if (!existing) {
-            bootNum = (UINT16)n;
-            break;
+    // 策略：先找不在 BootOrder 中的编号，再找真正不存在的编号
+    UINT16 bootNum = 0xFFFF;
+    
+    // 标记 BootOrder 中已使用的编号
+    BOOL usedInOrder[256] = {FALSE};
+    for (DWORD i = 0; i < bo.Count && i < 256; i++) {
+        if (bo.Order[i] > 0 && bo.Order[i] < 256) {
+            usedInOrder[bo.Order[i]] = TRUE;
         }
-        UefiNvramFreeEntry(existing);
+    }
+    
+    // 优先找不在 BootOrder 中但变量存在的（可能是之前删除后残留的）
+    for (UINT32 n = 1; n <= 0x00FF; n++) {
+        if (!usedInOrder[n]) {
+            UEFI_BOOT_ENTRY* existing = UefiNvramGetBootEntry((UINT16)n);
+            if (existing) {
+                // 变量存在但不在 BootOrder 中，可以复用
+                UefiNvramFreeEntry(existing);
+                bootNum = (UINT16)n;
+                break;
+            }
+        }
+    }
+    
+    // 如果没找到可复用的，找完全不存在的
+    if (bootNum == 0xFFFF) {
+        for (UINT32 n = 1; n <= 0x00FF; n++) {
+            UEFI_BOOT_ENTRY* existing = UefiNvramGetBootEntry((UINT16)n);
+            if (!existing) {
+                bootNum = (UINT16)n;
+                break;
+            }
+            UefiNvramFreeEntry(existing);
+        }
+    }
+    
+    // 如果还没找到，找一个不在 BootOrder 中的强制使用
+    if (bootNum == 0xFFFF) {
+        for (UINT32 n = 1; n <= 0x00FF; n++) {
+            if (!usedInOrder[n]) {
+                bootNum = (UINT16)n;
+                // 先删除可能存在的旧变量
+                UefiNvramDeleteBootEntry(bootNum);
+                break;
+            }
+        }
+    }
+    
+    if (bootNum == 0xFFFF) {
+        // 没有空闲槽位
+        if (bo.Order) UefiNvramFreeBootOrder(&bo);
+        return FALSE;
     }
     
     // 构建 EFI_LOAD_OPTION
     DWORD blobSize = 0;
     BYTE* blob = UefiNvramBuildLoadOption(name, efiPath, LOAD_OPTION_ACTIVE, &blobSize);
-    if (!blob) return FALSE;
+    if (!blob) {
+        if (bo.Order) UefiNvramFreeBootOrder(&bo);
+        return FALSE;
+    }
     
     // 写入 NVRAM
     BOOL ok = UefiNvramSetBootEntry(bootNum, blob, blobSize);
     free(blob);
     
-    if (!ok) return FALSE;
+    if (!ok) {
+        if (bo.Order) UefiNvramFreeBootOrder(&bo);
+        return FALSE;
+    }
     
     // 更新 BootOrder，新项放第一位
-    UEFI_BOOT_ORDER bo = {0};
-    if (UefiNvramGetBootOrder(&bo) && bo.Count > 0) {
+    if (bo.Count > 0) {
         UINT16* newOrder = (UINT16*)malloc((bo.Count + 1) * sizeof(UINT16));
         if (newOrder) {
             newOrder[0] = bootNum;
@@ -242,7 +303,96 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
 }
 
 // ============================================
+// 递归删除目录
+// ============================================
+static BOOL DeleteDirectoryRecursive(const WCHAR* path)
+{
+    WCHAR findPath[MAX_PATH];
+    WIN32_FIND_DATAW findData;
+
+    swprintf(findPath, MAX_PATH, L"%s\\*.*", path);
+
+    HANDLE hFind = FindFirstFileW(findPath, &findData);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (wcscmp(findData.cFileName, L".") == 0 ||
+                wcscmp(findData.cFileName, L"..") == 0) {
+                continue;
+            }
+
+            WCHAR filePath[MAX_PATH];
+            swprintf(filePath, MAX_PATH, L"%s\\%s", path, findData.cFileName);
+
+            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                DeleteDirectoryRecursive(filePath);
+            } else {
+                DeleteFileW(filePath);
+            }
+        } while (FindNextFileW(hFind, &findData));
+
+        FindClose(hFind);
+    }
+
+    return RemoveDirectoryW(path);
+}
+
+// ============================================
+// 删除 ESP 上的 EFI 目录
+// 排除系统目录：Microsoft, BOOT, refind, limine
+// ============================================
+static void DeleteEfiDirectoryFromEsp(const WCHAR* efiPath)
+{
+    if (!efiPath || wcslen(efiPath) == 0) return;
+    
+    // 解析路径，提取目录名
+    // efiPath 格式: \EFI\DirectoryName\file.efi
+    if (wcsncmp(efiPath, L"\\EFI\\", 5) != 0) return;
+    
+    // 提取 \EFI\ 后面的目录名
+    const WCHAR* dirStart = efiPath + 5;
+    const WCHAR* dirEnd = wcschr(dirStart, L'\\');
+    if (!dirEnd) return;  // 没有子目录，不删除
+    
+    // 检查目录名长度
+    size_t dirLen = dirEnd - dirStart;
+    if (dirLen == 0 || dirLen > 64) return;
+    
+    // 提取目录名
+    WCHAR dirName[64] = {0};
+    wcsncpy(dirName, dirStart, dirLen);
+    
+    // 排除系统目录（不区分大小写）
+    const WCHAR* protectedDirs[] = {
+        L"Microsoft", L"BOOT", L"refind", L"limine", L"Apple", L"ubuntu", L"debian", L"fedora", L"opensuse"
+    };
+    for (int i = 0; i < sizeof(protectedDirs) / sizeof(protectedDirs[0]); i++) {
+        if (_wcsicmp(dirName, protectedDirs[i]) == 0) {
+            return;  // 受保护的目录，不删除
+        }
+    }
+    
+    // 挂载 ESP
+    WCHAR esp[4] = {0};
+    if (!EspMount(esp, 4)) {
+        return;  // 无法挂载 ESP
+    }
+    
+    // 构建完整目录路径
+    WCHAR fullPath[MAX_PATH];
+    swprintf(fullPath, MAX_PATH, L"%s\\EFI\\%s", esp, dirName);
+    
+    // 检查目录是否存在
+    if (GetFileAttributesW(fullPath) != INVALID_FILE_ATTRIBUTES) {
+        DeleteDirectoryRecursive(fullPath);
+    }
+    
+    // 卸载 ESP
+    EspUnmount(esp);
+}
+
+// ============================================
 // 删除启动项
+// 同时删除 ESP 上对应的目录
 // ============================================
 BOOL UefiDeleteBootEntry(DWORD id) {
     if (id == 0) return FALSE;
@@ -251,6 +401,43 @@ BOOL UefiDeleteBootEntry(DWORD id) {
     
     UINT16 bootNum = (UINT16)id;
     BOOL success = FALSE;
+    WCHAR efiPath[512] = {0};
+    
+    // 先获取启动项的 EFI 路径
+    UEFI_BOOT_ENTRY* entry = UefiNvramGetBootEntry(bootNum);
+    if (entry && entry->RawData && entry->RawDataSize > 6) {
+        // 从 RawData 提取 EFI 路径
+        DWORD offset = 6;
+        const WCHAR* desc = (const WCHAR*)(entry->RawData + offset);
+        while (offset + 2 <= entry->RawDataSize && desc[0] != L'\0') {
+            offset += 2;
+            desc++;
+        }
+        offset += 2;
+        
+        // 解析 Device Path
+        while (offset + 4 <= entry->RawDataSize) {
+            UINT8 nodeType = entry->RawData[offset];
+            UINT8 nodeSubType = entry->RawData[offset + 1];
+            UINT16 nodeLen = entry->RawData[offset + 2] | (entry->RawData[offset + 3] << 8);
+            
+            if (nodeLen < 4 || offset + nodeLen > entry->RawDataSize) break;
+            if (nodeType == 0x7F && nodeSubType == 0xFF) break;
+            
+            if (nodeType == 0x04 && nodeSubType == 0x04 && nodeLen > 4) {
+                const WCHAR* pathStr = (const WCHAR*)(entry->RawData + offset + 4);
+                DWORD pathChars = (nodeLen - 4) / 2;
+                if (pathChars > 0 && pathStr[0] != L'\0') {
+                    DWORD copyLen = (pathChars < 511) ? pathChars : 511;
+                    wcsncpy(efiPath, pathStr, copyLen);
+                    efiPath[copyLen] = L'\0';
+                    break;
+                }
+            }
+            offset += nodeLen;
+        }
+    }
+    if (entry) UefiNvramFreeEntry(entry);
     
     // 先从 BootOrder 移除
     UEFI_BOOT_ORDER bo = {0};
@@ -275,8 +462,18 @@ BOOL UefiDeleteBootEntry(DWORD id) {
         UefiNvramFreeBootOrder(&bo);
     }
     
-    // 删除 BootXXXX 变量（忽略返回值）
-    UefiNvramDeleteBootEntry(bootNum);
+    // 删除 BootXXXX 变量
+    if (UefiNvramDeleteBootEntry(bootNum)) {
+        // 删除成功，success 保持不变
+    } else {
+        // 删除失败，但只要从 BootOrder 移除了也算成功
+        // 变量残留会在下次添加时被复用
+    }
+    
+    // 删除 ESP 上的 EFI 目录
+    if (success && efiPath[0] != L'\0') {
+        DeleteEfiDirectoryFromEsp(efiPath);
+    }
     
     return success;
 }

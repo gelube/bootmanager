@@ -6,14 +6,219 @@
 
 #include "../../include/limine.h"
 #include "../../include/esp.h"
+#include "../../include/uefi_nvram.h"
 #include <wchar.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 // 最大磁盘和分区数量
 #define MAX_DISKS 64
 #define MAX_PARTITIONS 128
 #define SECTOR_SIZE 512
+#define MAX_BOOT_ENTRIES 32
+
+// 启动项结构
+typedef struct {
+    WCHAR name[128];
+    WCHAR path[MAX_PATH];
+    WCHAR protocol[32];  // efi, linux, chain
+    int priority;        // 排序优先级
+} BOOT_ENTRY;
+
+// ============================================
+// 自动扫描 EFI 文件并生成配置
+// ============================================
+
+// 检查 EFI 文件是否存在
+static BOOL EfiFileExists(const WCHAR* drive, const WCHAR* efiPath)
+{
+    WCHAR fullPath[MAX_PATH];
+    swprintf(fullPath, MAX_PATH, L"%s%s", drive, efiPath);
+    return (GetFileAttributesW(fullPath) != INVALID_FILE_ATTRIBUTES);
+}
+
+// 扫描 ESP 分区上的 EFI 文件
+static int ScanEfiFiles(const WCHAR* espDrive, BOOT_ENTRY* entries, int maxEntries)
+{
+    int count = 0;
+    
+    // Windows Boot Manager
+    if (count < maxEntries && EfiFileExists(espDrive, L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi")) {
+        wcscpy(entries[count].name, L"Windows Boot Manager");
+        wcscpy(entries[count].path, L"boot():/EFI/Microsoft/Boot/bootmgfw.efi");
+        wcscpy(entries[count].protocol, L"efi");
+        entries[count].priority = 1;
+        count++;
+    }
+    
+    // Linux 发行版 (按优先级排序)
+    struct {
+        const WCHAR* path;
+        const WCHAR* name;
+        int priority;
+    } linuxDistros[] = {
+        { L"\\EFI\\ubuntu\\grubx64.efi", L"Ubuntu", 10 },
+        { L"\\EFI\\ubuntu\\shimx64.efi", L"Ubuntu (Secure Boot)", 11 },
+        { L"\\EFI\\fedora\\grubx64.efi", L"Fedora", 12 },
+        { L"\\EFI\\fedora\\shimx64.efi", L"Fedora (Secure Boot)", 13 },
+        { L"\\EFI\\debian\\grubx64.efi", L"Debian", 14 },
+        { L"\\EFI\\debian\\shimx64.efi", L"Debian (Secure Boot)", 15 },
+        { L"\\EFI\\arch\\grubx64.efi", L"Arch Linux", 16 },
+        { L"\\EFI\\opensuse\\grubx64.efi", L"openSUSE", 17 },
+        { L"\\EFI\\centos\\grubx64.efi", L"CentOS", 18 },
+        { L"\\EFI\\grub\\grubx64.efi", L"GRUB", 20 },
+        { L"\\EFI\\grub\\shimx64.efi", L"GRUB (Secure Boot)", 21 },
+        { NULL, NULL, 0 }
+    };
+    
+    for (int i = 0; linuxDistros[i].path && count < maxEntries; i++) {
+        if (EfiFileExists(espDrive, linuxDistros[i].path)) {
+            wcscpy(entries[count].name, linuxDistros[i].name);
+            swprintf(entries[count].path, MAX_PATH, L"boot():%s", linuxDistros[i].path);
+            wcscpy(entries[count].protocol, L"efi");
+            entries[count].priority = linuxDistros[i].priority;
+            count++;
+        }
+    }
+    
+    // rEFInd
+    if (count < maxEntries && EfiFileExists(espDrive, L"\\EFI\\refind\\refind_x64.efi")) {
+        wcscpy(entries[count].name, L"rEFInd Boot Manager");
+        wcscpy(entries[count].path, L"boot():/EFI/refind/refind_x64.efi");
+        wcscpy(entries[count].protocol, L"efi");
+        entries[count].priority = 30;
+        count++;
+    }
+    
+    // systemd-boot
+    if (count < maxEntries && EfiFileExists(espDrive, L"\\EFI\\systemd\\systemd-bootx64.efi")) {
+        wcscpy(entries[count].name, L"systemd-boot");
+        wcscpy(entries[count].path, L"boot():/EFI/systemd/systemd-bootx64.efi");
+        wcscpy(entries[count].protocol, L"efi");
+        entries[count].priority = 31;
+        count++;
+    }
+    
+    // 其他 EFI 文件 (扫描 EFI 目录下的其他目录)
+    WCHAR searchPath[MAX_PATH];
+    WIN32_FIND_DATAW findData;
+    
+    swprintf(searchPath, MAX_PATH, L"%s\\EFI\\*.*", espDrive);
+    HANDLE hFind = FindFirstFileW(searchPath, &findData);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+            if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) continue;
+            
+            // 跳过已处理的目录
+            if (_wcsicmp(findData.cFileName, L"Microsoft") == 0 ||
+                _wcsicmp(findData.cFileName, L"Boot") == 0 ||
+                _wcsicmp(findData.cFileName, L"boot") == 0 ||
+                _wcsicmp(findData.cFileName, L"ubuntu") == 0 ||
+                _wcsicmp(findData.cFileName, L"fedora") == 0 ||
+                _wcsicmp(findData.cFileName, L"debian") == 0 ||
+                _wcsicmp(findData.cFileName, L"arch") == 0 ||
+                _wcsicmp(findData.cFileName, L"opensuse") == 0 ||
+                _wcsicmp(findData.cFileName, L"centos") == 0 ||
+                _wcsicmp(findData.cFileName, L"grub") == 0 ||
+                _wcsicmp(findData.cFileName, L"refind") == 0 ||
+                _wcsicmp(findData.cFileName, L"systemd") == 0 ||
+                _wcsicmp(findData.cFileName, L"limine") == 0) {
+                continue;
+            }
+            
+            // 检查是否有 EFI 文件
+            WCHAR efiPath[MAX_PATH];
+            swprintf(efiPath, MAX_PATH, L"%s\\EFI\\%s\\%s", espDrive, findData.cFileName, findData.cFileName);
+            
+            // 尝试常见的 EFI 文件名
+            const WCHAR* efiFiles[] = {
+                L"bootx64.efi", L"BOOTX64.EFI",
+                L"grubx64.efi", L"GRUBX64.EFI",
+                L"shimx64.efi", L"SHIMX64.EFI",
+                NULL
+            };
+            
+            for (int i = 0; efiFiles[i] && count < maxEntries; i++) {
+                swprintf(efiPath, MAX_PATH, L"\\EFI\\%s\\%s", findData.cFileName, efiFiles[i]);
+                if (EfiFileExists(espDrive, efiPath)) {
+                    swprintf(entries[count].name, 128, L"%s", findData.cFileName);
+                    swprintf(entries[count].path, MAX_PATH, L"boot():%s", efiPath);
+                    wcscpy(entries[count].protocol, L"efi");
+                    entries[count].priority = 50;
+                    count++;
+                    break;
+                }
+            }
+        } while (FindNextFileW(hFind, &findData) && count < maxEntries);
+        FindClose(hFind);
+    }
+    
+    return count;
+}
+
+// 比较函数，用于排序
+static int CompareBootEntries(const void* a, const void* b)
+{
+    const BOOT_ENTRY* ea = (const BOOT_ENTRY*)a;
+    const BOOT_ENTRY* eb = (const BOOT_ENTRY*)b;
+    return ea->priority - eb->priority;
+}
+
+// 生成 limine.conf 内容
+static char* GenerateLimineConf(const WCHAR* espDrive, DWORD* outSize)
+{
+    BOOT_ENTRY entries[MAX_BOOT_ENTRIES];
+    int count = 0;
+    
+    // 扫描所有 EFI 文件（包括 Windows）
+    // ScanEfiFiles 会自动添加 Windows Boot Manager
+    count = ScanEfiFiles(espDrive, entries, MAX_BOOT_ENTRIES);
+    
+    // 如果没有扫描到任何条目，添加一个默认的 Windows 条目
+    if (count == 0) {
+        wcscpy(entries[count].name, L"Windows Boot Manager");
+        wcscpy(entries[count].path, L"boot():/EFI/Microsoft/Boot/bootmgfw.efi");
+        wcscpy(entries[count].protocol, L"efi");
+        entries[count].priority = 1;
+        count++;
+    }
+    
+    // 按优先级排序
+    if (count > 1) {
+        qsort(entries, count, sizeof(BOOT_ENTRY), CompareBootEntries);
+    }
+    
+    // 构建配置字符串
+    char* buffer = (char*)malloc(16384);  // 增大缓冲区
+    if (!buffer) {
+        *outSize = 0;
+        return NULL;
+    }
+    
+    char* p = buffer;
+    p += sprintf(p, "# Limine Configuration\n");
+    p += sprintf(p, "# Auto-generated by Boot Manager Pro v3.2.0\n\n");
+    p += sprintf(p, "timeout: 5\n\n");
+    
+    for (int i = 0; i < count; i++) {
+        // 转换为 UTF-8
+        char nameUtf8[256];
+        char pathUtf8[MAX_PATH];
+        char protocolUtf8[32];
+        WideCharToMultiByte(CP_UTF8, 0, entries[i].name, -1, nameUtf8, 256, NULL, NULL);
+        WideCharToMultiByte(CP_UTF8, 0, entries[i].path, -1, pathUtf8, MAX_PATH, NULL, NULL);
+        WideCharToMultiByte(CP_UTF8, 0, entries[i].protocol, -1, protocolUtf8, 32, NULL, NULL);
+        
+        p += sprintf(p, "/%s\n", nameUtf8);
+        p += sprintf(p, "    protocol: %s\n", protocolUtf8);
+        p += sprintf(p, "    path: %s\n\n", pathUtf8);
+    }
+    
+    *outSize = (DWORD)(p - buffer);
+    return buffer;
+}
 
 // 最后的错误信息
 static WCHAR s_lastError[1024] = {0};
@@ -102,6 +307,67 @@ LIMINE_STATUS LimineCheckInstalled(const WCHAR* drive)
     }
     
     return LIMINE_NOT_INSTALLED;
+}
+
+// ============================================
+// 智能检测 Limine 安装状态（自动挂载 ESP）
+// ============================================
+LIMINE_STATUS LimineCheckInstalledAuto(WCHAR* outEspDrive, DWORD outSize) {
+    LIMINE_STATUS status = LIMINE_NOT_INSTALLED;
+    WCHAR esp[4] = {0};
+    BOOL mountedByUs = FALSE;
+    
+    // 1. 先检查已挂载的 ESP 分区（排除可移动介质）
+    for (WCHAR d = L'C'; d <= L'Z'; d++) {
+        WCHAR root[4] = {d, L':', L'\\', 0};
+        
+        // 排除可移动介质
+        if (GetDriveTypeW(root) != DRIVE_FIXED && GetDriveTypeW(root) != DRIVE_RAMDISK) {
+            continue;
+        }
+        
+        WCHAR efiPath[MAX_PATH];
+        swprintf(efiPath, MAX_PATH, L"%c:\\EFI\\limine\\BOOTX64.EFI", d);
+        if (GetFileAttributesW(efiPath) != INVALID_FILE_ATTRIBUTES) {
+            if (outEspDrive) swprintf(outEspDrive, outSize, L"%c:", d);
+            return LIMINE_INSTALLED_UEFI;
+        }
+    }
+    
+    // 2. 检查 boot\limine（MBR 模式，不依赖 ESP）
+    for (WCHAR d = L'C'; d <= L'Z'; d++) {
+        WCHAR root[4] = {d, L':', L'\\', 0};
+        
+        // 排除可移动介质
+        if (GetDriveTypeW(root) != DRIVE_FIXED) {
+            continue;
+        }
+        
+        WCHAR bootPath[MAX_PATH];
+        swprintf(bootPath, MAX_PATH, L"%c:\\boot\\limine\\limine.sys", d);
+        if (GetFileAttributesW(bootPath) != INVALID_FILE_ATTRIBUTES) {
+            if (outEspDrive) swprintf(outEspDrive, outSize, L"%c:", d);
+            return LIMINE_INSTALLED_MBR;
+        }
+    }
+    
+    // 3. 尝试挂载 ESP 检测
+    if (EspMountEx(esp, 4, &mountedByUs)) {
+        WCHAR liminePath[MAX_PATH];
+        swprintf(liminePath, MAX_PATH, L"%s\\EFI\\limine\\BOOTX64.EFI", esp);
+        
+        if (GetFileAttributesW(liminePath) != INVALID_FILE_ATTRIBUTES) {
+            status = LIMINE_INSTALLED_UEFI;
+            if (outEspDrive) wcscpy(outEspDrive, esp);
+        }
+        
+        // 卸载我们挂载的 ESP
+        if (mountedByUs) {
+            EspUnmountEx(esp, TRUE);
+        }
+    }
+    
+    return status;
 }
 
 // ============================================
@@ -506,7 +772,6 @@ BOOL LimineInstallToUEFI(const WCHAR* espDrive, const WCHAR* limineSource)
 {
     WCHAR efiDir[MAX_PATH];
     WCHAR limineDir[MAX_PATH];
-    WCHAR bootDir[MAX_PATH];
     WCHAR srcFile[MAX_PATH];
     WCHAR destFile[MAX_PATH];
     
@@ -518,58 +783,116 @@ BOOL LimineInstallToUEFI(const WCHAR* espDrive, const WCHAR* limineSource)
     // 创建 EFI 目录结构
     swprintf(efiDir, MAX_PATH, L"%s\\EFI", espDrive);
     swprintf(limineDir, MAX_PATH, L"%s\\EFI\\limine", espDrive);
-    swprintf(bootDir, MAX_PATH, L"%s\\EFI\\Boot", espDrive);
-    
     CreateDirectoryW(efiDir, NULL);
     CreateDirectoryW(limineDir, NULL);
-    CreateDirectoryW(bootDir, NULL);
     
-    // 复制 limine-efi 目录
+    // 复制 limine-efi 目录内容
     WCHAR srcEfiDir[MAX_PATH];
     swprintf(srcEfiDir, MAX_PATH, L"%s\\limine-efi", limineSource);
     if (GetFileAttributesW(srcEfiDir) != INVALID_FILE_ATTRIBUTES) {
         CopyDirContents(srcEfiDir, limineDir);
     }
     
-    // 复制 BOOTX64.EFI
+    // 复制 BOOTX64.EFI 到 EFI\limine\
     swprintf(srcFile, MAX_PATH, L"%s\\BOOTX64.EFI", srcEfiDir);
     swprintf(destFile, MAX_PATH, L"%s\\BOOTX64.EFI", limineDir);
     if (GetFileAttributesW(srcFile) != INVALID_FILE_ATTRIBUTES) {
         CopyFileW(srcFile, destFile, FALSE);
     }
     
-    // 备份并替换 EFI\Boot\BOOTX64.EFI
-    swprintf(destFile, MAX_PATH, L"%s\\BOOTX64.EFI", bootDir);
-    WCHAR backupPath[MAX_PATH];
-    swprintf(backupPath, MAX_PATH, L"%s\\BOOTX64.EFI.bak", bootDir);
-    
-    if (GetFileAttributesW(destFile) != INVALID_FILE_ATTRIBUTES) {
-        if (GetFileAttributesW(backupPath) == INVALID_FILE_ATTRIBUTES) {
-            CopyFileW(destFile, backupPath, FALSE);
-        }
-    }
-    
-    if (GetFileAttributesW(srcFile) != INVALID_FILE_ATTRIBUTES) {
-        CopyFileW(srcFile, destFile, FALSE);
-    }
-    
-    // 创建配置文件
+    // 创建配置文件 (自动扫描系统)
     swprintf(destFile, MAX_PATH, L"%s\\limine.conf", limineDir);
-    if (GetFileAttributesW(destFile) == INVALID_FILE_ATTRIBUTES) {
-        HANDLE hFile = CreateFileW(destFile, GENERIC_WRITE, 0, NULL,
-            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            const char* defaultConf = 
-                "# Limine Configuration\n"
-                "# Auto-generated by Boot Manager Pro\n\n"
-                "timeout: 5\n\n"
-                "/Windows Boot Manager\n"
-                "    protocol: efi_chain\n"
-                "    path: /EFI/Microsoft/Boot/bootmgfw.efi\n\n";
-            DWORD written;
-            WriteFile(hFile, defaultConf, (DWORD)strlen(defaultConf), &written, NULL);
-            CloseHandle(hFile);
+    {
+        DWORD confSize = 0;
+        char* confContent = GenerateLimineConf(espDrive, &confSize);
+        
+        if (confContent && confSize > 0) {
+            HANDLE hFile = CreateFileW(destFile, GENERIC_WRITE, 0, NULL,
+                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                DWORD written;
+                WriteFile(hFile, confContent, confSize, &written, NULL);
+                CloseHandle(hFile);
+            }
+            free(confContent);
+        } else {
+            // 如果扫描失败，创建基本配置
+            HANDLE hFile = CreateFileW(destFile, GENERIC_WRITE, 0, NULL,
+                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                const char* defaultConf = 
+                    "# Limine Configuration\n"
+                    "# Auto-generated by Boot Manager Pro\n\n"
+                    "timeout: 5\n\n";
+                DWORD written;
+                WriteFile(hFile, defaultConf, (DWORD)strlen(defaultConf), &written, NULL);
+                CloseHandle(hFile);
+            }
         }
+    }
+    
+    // 注册到 NVRAM
+    if (UefiNvramAcquirePrivilege()) {
+        // 先检查是否已存在 Limine 启动项，如果存在则删除
+        UEFI_BOOT_ORDER bo = {0};
+        if (UefiNvramGetBootOrder(&bo) && bo.Count > 0) {
+            // 找出所有 Limine 相关的启动项
+            DWORD limineCount = 0;
+            UINT16 limineBoots[16] = {0};
+            
+            for (DWORD i = 0; i < bo.Count && limineCount < 16; i++) {
+                UEFI_BOOT_ENTRY* entry = UefiNvramGetBootEntry(bo.Order[i]);
+                if (entry) {
+                    if (wcsstr(entry->Description, L"Limine") != NULL) {
+                        limineBoots[limineCount++] = bo.Order[i];
+                    }
+                    UefiNvramFreeEntry(entry);
+                }
+            }
+            
+            // 删除已存在的 Limine 启动项
+            for (DWORD i = 0; i < limineCount; i++) {
+                UefiNvramDeleteBootEntry(limineBoots[i]);
+            }
+            
+            // 重新获取 BootOrder（删除后可能已变化）
+            if (bo.Order) UefiNvramFreeBootOrder(&bo);
+            UefiNvramGetBootOrder(&bo);
+        }
+        
+        // 找空闲槽位
+        UINT16 bootNum = 0x0001;
+        if (bo.Count > 0) {
+            BOOL used[256] = {FALSE};
+            for (DWORD i = 0; i < bo.Count && i < 256; i++) {
+                if (bo.Order[i] < 256) used[bo.Order[i]] = TRUE;
+            }
+            for (int n = 1; n < 256; n++) {
+                if (!used[n]) { bootNum = (UINT16)n; break; }
+            }
+        }
+        
+        DWORD blobSize = 0;
+        BYTE* blob = UefiNvramBuildLoadOption(L"Limine Boot Manager",
+            L"\\EFI\\limine\\BOOTX64.EFI", LOAD_OPTION_ACTIVE, &blobSize);
+        if (blob) {
+            if (UefiNvramSetBootEntry(bootNum, blob, blobSize)) {
+                // 添加到 BootOrder 第一位
+                if (bo.Count > 0) {
+                    UINT16* newOrder = (UINT16*)malloc((bo.Count + 1) * sizeof(UINT16));
+                    if (newOrder) {
+                        newOrder[0] = bootNum;
+                        memcpy(newOrder + 1, bo.Order, bo.Count * sizeof(UINT16));
+                        UefiNvramSetBootOrder(newOrder, bo.Count + 1);
+                        free(newOrder);
+                    }
+                } else {
+                    UefiNvramSetBootOrder(&bootNum, 1);
+                }
+            }
+            free(blob);
+        }
+        if (bo.Order) UefiNvramFreeBootOrder(&bo);
     }
     
     return TRUE;
@@ -622,6 +945,10 @@ BOOL LimineInstall(const WCHAR* limineSource)
         }
         
         BOOL result = LimineInstallToUEFI(esp, limineSource);
+        
+        // 安装完成后，总是卸载 ESP（用户不应该看到 ESP 盘符）
+        EspUnmount(esp);
+        
         return result;
     } else {
         // BIOS/MBR 模式：安装到系统磁盘的 MBR
@@ -680,15 +1007,55 @@ BOOL LimineUninstall(const WCHAR* drive)
         DeleteFileW(limineSys);
     }
     
-    // 尝试恢复 EFI\Boot\BOOTX64.EFI 备份
-    WCHAR bootxEfi[MAX_PATH];
-    WCHAR backupPath[MAX_PATH];
-    swprintf(bootxEfi, MAX_PATH, L"%s\\EFI\\Boot\\BOOTX64.EFI", drive);
-    swprintf(backupPath, MAX_PATH, L"%s\\EFI\\Boot\\BOOTX64.EFI.bak", drive);
-    if (GetFileAttributesW(backupPath) != INVALID_FILE_ATTRIBUTES) {
-        DeleteFileW(bootxEfi);
-        CopyFileW(backupPath, bootxEfi, FALSE);
-        DeleteFileW(backupPath);
+    // 从 NVRAM 删除 Limine 启动项
+    if (UefiNvramAcquirePrivilege()) {
+        UEFI_BOOT_ORDER bo = {0};
+        if (UefiNvramGetBootOrder(&bo) && bo.Count > 0) {
+            // 找出所有 Limine 相关的启动项编号
+            DWORD limineCount = 0;
+            UINT16 limineBoots[16] = {0};
+            
+            for (DWORD i = 0; i < bo.Count && limineCount < 16; i++) {
+                UEFI_BOOT_ENTRY* entry = UefiNvramGetBootEntry(bo.Order[i]);
+                if (entry) {
+                    // 检查描述是否包含 "Limine"
+                    if (wcsstr(entry->Description, L"Limine") != NULL) {
+                        limineBoots[limineCount++] = bo.Order[i];
+                    }
+                    UefiNvramFreeEntry(entry);
+                }
+            }
+            
+            // 删除找到的 Limine 启动项
+            for (DWORD i = 0; i < limineCount; i++) {
+                UefiNvramDeleteBootEntry(limineBoots[i]);
+            }
+            
+            // 重建 BootOrder（排除已删除的项）
+            if (limineCount > 0) {
+                UINT16* newOrder = (UINT16*)malloc((bo.Count - limineCount) * sizeof(UINT16));
+                if (newOrder) {
+                    DWORD newCount = 0;
+                    for (DWORD i = 0; i < bo.Count; i++) {
+                        BOOL isLimine = FALSE;
+                        for (DWORD j = 0; j < limineCount; j++) {
+                            if (bo.Order[i] == limineBoots[j]) {
+                                isLimine = TRUE;
+                                break;
+                            }
+                        }
+                        if (!isLimine) {
+                            newOrder[newCount++] = bo.Order[i];
+                        }
+                    }
+                    if (newCount > 0) {
+                        UefiNvramSetBootOrder(newOrder, newCount);
+                    }
+                    free(newOrder);
+                }
+            }
+        }
+        if (bo.Order) UefiNvramFreeBootOrder(&bo);
     }
     
     return TRUE;

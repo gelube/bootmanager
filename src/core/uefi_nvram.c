@@ -82,7 +82,24 @@ static BOOL NvramWrite(LPCWSTR name, const BYTE* data, DWORD size, DWORD attribs
 static BOOL NvramDelete(LPCWSTR name) {
     LoadFirmwareAPIs();
     if (!s_setFwEx) { SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
-    return s_setFwEx(name, EFI_GLOBAL_VARIABLE_GUID, NULL, 0, 0);
+    
+    // 先读取变量的属性
+    BYTE buf[1];
+    DWORD attr = 0;
+    s_getFwEx(name, EFI_GLOBAL_VARIABLE_GUID, buf, 0, &attr);
+    
+    // 如果读取到了属性，使用该属性删除；否则使用 7 (NV|BS|RT)
+    if (attr == 0) attr = 7;
+    
+    // 删除变量：数据为 NULL，大小为 0
+    BOOL result = s_setFwEx(name, EFI_GLOBAL_VARIABLE_GUID, NULL, 0, 0);
+    
+    // 如果失败，尝试用属性值删除
+    if (!result) {
+        result = s_setFwEx(name, EFI_GLOBAL_VARIABLE_GUID, NULL, 0, attr);
+    }
+    
+    return result;
 }
 
 // ---------------------------------------------------------------------------

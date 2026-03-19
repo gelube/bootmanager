@@ -195,7 +195,20 @@ BOOL BackupBCD(const WCHAR* outputPath) {
         DWORD exitCode;
         GetExitCodeProcess(sei.hProcess, &exitCode);
         CloseHandle(sei.hProcess);
-        return (exitCode == 0);
+        
+        if (exitCode == 0) {
+            // 清理 bcdedit 产生的日志文件 (.LOG, .LOG1, .LOG2)
+            WCHAR logPath[MAX_PATH];
+            for (int i = 0; i <= 2; i++) {
+                if (i == 0) {
+                    swprintf(logPath, MAX_PATH, L"%s.LOG", outputPath);
+                } else {
+                    swprintf(logPath, MAX_PATH, L"%s.LOG%d", outputPath, i);
+                }
+                DeleteFileW(logPath);
+            }
+            return TRUE;
+        }
     }
     
     return FALSE;
@@ -231,42 +244,10 @@ BOOL RestoreBCD(const WCHAR* backupPath) {
 // Backup NVRAM (UEFI boot entries)
 BOOL BackupNVRAM(const WCHAR* outputPath) {
     // NVRAM backup is essentially the same as BCD backup on Windows
-    // Plus we export firmware entries
-    WCHAR cmd[1024];
-    WCHAR txtPath[MAX_PATH];
-    
     if (!outputPath) return FALSE;
     
-    // First do BCD export
-    if (!BackupBCD(outputPath)) {
-        return FALSE;
-    }
-    
-    // Export firmware entries to text file
-    wcsncpy(txtPath, outputPath, MAX_PATH);
-    WCHAR* ext = wcsrchr(txtPath, L'.');
-    if (ext) {
-        wcscpy(ext, L".txt");
-    } else {
-        wcscat(txtPath, L".txt");
-    }
-    
-    swprintf(cmd, 1024, L"/c bcdedit /enum firmware > \"%s\"", txtPath);
-    
-    SHELLEXECUTEINFOW sei = {0};
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas";
-    sei.lpFile = L"cmd.exe";
-    sei.lpParameters = cmd;
-    sei.nShow = SW_HIDE;
-    
-    if (ShellExecuteExW(&sei)) {
-        WaitForSingleObject(sei.hProcess, INFINITE);
-        CloseHandle(sei.hProcess);
-    }
-    
-    return TRUE;
+    // 直接返回成功，不再生成额外的日志文件
+    return BackupBCD(outputPath);
 }
 
 // Restore NVRAM

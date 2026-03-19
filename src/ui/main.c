@@ -1,8 +1,5 @@
 /**
  * Boot Manager Pro v3 - Main UI
- * 亮色主题 - 专业高端设计
- * 
- * 设计风格：浅色背景 + 深色文字 + 蓝色主色调
  */
 
 #include <windows.h>
@@ -12,369 +9,115 @@
 #include <shlobj.h>
 #include <wchar.h>
 #include <stdio.h>
-#include "dialogs/add_efi_dialog.h"
 #include "../core/uefi.h"
 #include "../core/refind.h"
-#include "../core/refind_config.h"
+#include "limine.h"
 #include "../core/backup.h"
 #include "../../include/esp.h"
 #include "../../include/boot_mode.h"
-#include "../core/wimboot.h"
-#include "dialog.h"
-#include "../../include/refind_page.h"
-#include "../../include/bcd_page.h"
+#include "../../include/mbr_manager.h"
 
-#define REFIND_SOURCE_PATH L".\\refind"
+// 颜色
+#define COLOR_BG_MAIN       RGB(250, 250, 252)
+#define COLOR_TEXT_PRIMARY  RGB(17, 24, 39)
 
-// ============================================
-// 亮色主题 - 设计令牌
-// ============================================
-// 背景层次
-#define COLOR_BG_MAIN       RGB(250, 250, 252)     // #FAFAFC 主背景
-#define COLOR_BG_SIDEBAR    RGB(255, 255, 255)     // #FFFFFF 侧边栏
-#define COLOR_BG_CARD       RGB(255, 255, 255)     // #FFFFFF 卡片
-#define COLOR_BG_HOVER      RGB(243, 244, 246)     // #F3F4F6 悬停
-#define COLOR_BG_INPUT      RGB(249, 250, 251)     // #F9FAFB 输入框
-
-// 主色调
-#define COLOR_PRIMARY       RGB(37, 99, 235)       // #2563EB 主色蓝
-#define COLOR_PRIMARY_LIGHT RGB(59, 130, 246)      // #3B82F6 浅蓝
-#define COLOR_PRIMARY_DARK  RGB(29, 78, 216)       // #1D4ED8 深蓝
-
-// 文字
-#define COLOR_TEXT_PRIMARY  RGB(17, 24, 39)        // #111827 主文字
-#define COLOR_TEXT_SECOND   RGB(107, 114, 128)     // #6B7280 次要文字
-#define COLOR_TEXT_LIGHT    RGB(156, 163, 175)     // #9CA3AF 浅文字
-
-// 边框
-#define COLOR_BORDER        RGB(229, 231, 235)     // #E5E7EB 边框
-#define COLOR_BORDER_LIGHT  RGB(243, 244, 246)     // #F3F4F6 浅边框
-
-// 状态色
-#define COLOR_SUCCESS       RGB(22, 163, 74)       // #16A34A 成功绿
-#define COLOR_WARNING       RGB(234, 179, 8)       // #EAB308 警告黄
-#define COLOR_DANGER        RGB(220, 38, 38)       // #DC2626 危险红
-#define COLOR_INFO          RGB(14, 165, 233)      // #0EA5E9 信息蓝
-
-// ============================================
 // 尺寸
-// ============================================
 #define WINDOW_WIDTH        1000
 #define WINDOW_HEIGHT       720
 #define SIDEBAR_WIDTH       220
 #define NAV_ITEM_HEIGHT     48
-#define CONTENT_PADDING     32
 #define BTN_HEIGHT          38
-#define BTN_HEIGHT_LARGE    46
-#define BTN_WIDTH           140
+#define TAB_HEIGHT          28
 
-// ============================================
 // 控件 ID
-// ============================================
 enum {
-    ID_NAV_UEFI = 100, ID_NAV_MBR, ID_NAV_REFIND, ID_NAV_BCD, ID_NAV_BACKUP, ID_NAV_ABOUT,
-    ID_LIST_BOOT = 200, ID_BTN_REFRESH, ID_BTN_ADD_ENTRY, ID_BTN_DELETE_ENTRY,
-    ID_BTN_MOVE_UP, ID_BTN_MOVE_DOWN, ID_BTN_SET_DEFAULT, ID_BTN_MBR_FIX,
-    ID_LIST_REFIND = 260, ID_BTN_REFIND_REFRESH, ID_BTN_REFIND_DELETE, ID_BTN_ADD_MENU,
+    ID_NAV_BOOT_MGR = 100,
+    ID_NAV_THIRD_PARTY,
+    ID_NAV_BACKUP_RESTORE,
+    ID_NAV_ABOUT,
+    
+    ID_TAB_THIRD_PARTY = 151,
+    
+    ID_LIST_BOOT = 200,
+    ID_BTN_REFRESH, ID_BTN_ADD_ENTRY, ID_BTN_DELETE_ENTRY,
+    ID_BTN_MOVE_UP, ID_BTN_MOVE_DOWN, ID_BTN_SET_DEFAULT,
+    
     ID_BTN_INSTALL = 300, ID_BTN_UNINSTALL,
-    ID_EDIT_BACKUP_PATH = 400, ID_BTN_BROWSE_BKP,
-    ID_BTN_BACKUP_MBR, ID_BTN_BACKUP_BCD,
-    ID_BTN_RESTORE,
-    ID_BTN_MBR_REPAIR = 450, ID_BTN_UEFI_REPAIR,
+    ID_BTN_INSTALL_LIMINE = 310, ID_BTN_UNINSTALL_LIMINE,
+    
+    ID_BTN_BACKUP_MBR = 400, ID_BTN_RESTORE,
+    ID_BTN_MBR_REPAIR = 450,
+    ID_BTN_RESTORE_MBR = 460,
+    ID_BTN_UEFI_REPAIR,
     ID_STATUS_TEXT = 500,
-    // 下拉菜单项 ID
-    ID_MENU_ADD_EFI = 601,
-    ID_MENU_ADD_WIM = 602,
-    ID_MENU_ADD_VHD = 603
+    
+    // Limine 启动项管理按钮
+    ID_BTN_LIMINE_ADD = 600,
+    ID_BTN_LIMINE_EDIT,
+    ID_BTN_LIMINE_DELETE,
+    ID_BTN_LIMINE_REFRESH,
 };
 
-// ============================================
 // 全局变量
-// ============================================
 static HWND g_hMainWnd = NULL, g_hContent = NULL, g_hListView = NULL, g_hStatusText = NULL;
 static int g_currentPage = 0;
+static int g_currentThirdPartyTab = 0;
 static HFONT g_fontTitle = NULL, g_fontBody = NULL, g_fontSmall = NULL;
-static HWND g_navItems[6] = {0};
+static HWND g_navItems[4] = {0};
 static UEFI_BOOT_LIST* g_bootList = NULL;
 
-// ============================================
+// 内容容器窗口过程 - 转发消息到主窗口
+static LRESULT CALLBACK ContentWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_COMMAND:
+        // 转发到主窗口
+        SendMessageW(g_hMainWnd, msg, wParam, lParam);
+        return 0;
+        
+    case WM_NOTIFY:
+        // 转发到主窗口
+        SendMessageW(g_hMainWnd, msg, wParam, lParam);
+        return 0;
+        
+    case WM_CTLCOLORSTATIC:
+        return (LRESULT)GetStockObject(WHITE_BRUSH);
+    }
+    
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+// 注册内容容器窗口类
+static void RegisterContentClass(void)
+{
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = ContentWndProc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.lpszClassName = L"BootManagerContentClass";
+    wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    RegisterClassW(&wc);
+}
+
 // 函数声明
-// ============================================
 LRESULT CALLBACK MainWndProc(HWND, UINT, WPARAM, LPARAM);
 static void InitFonts(void);
 static void CreateNavigation(HWND);
 static void CreateContentArea(HWND);
 static void SwitchPage(int);
 static void SetStatus(const WCHAR*);
-static void BuildUEFIPage(HWND);
-static void BuildMBRPage(HWND);
-static void BuildRefindPage(HWND);
-static void BuildAdvancedPage(HWND);
+static void BuildBootMgrPage(HWND);
+static void BuildThirdPartyPage(HWND);
+static void BuildBackupRestorePage(HWND);
 static void BuildAboutPage(HWND);
 static void RefreshBootList(void);
-static void RefreshRefindMenuList(void);
-static BOOL ResolveRefindSourcePath(WCHAR* sourcePath, DWORD size);
-static BOOL BrowseBackupFile(HWND hWnd, WCHAR* filePath, DWORD size);
-static BOOL BrowseBackupFolder(HWND hWnd, WCHAR* folderPath, DWORD size);
-static BOOL RestoreFromBackupPath(HWND hWnd, const WCHAR* selectedPath);
-
-// ============================================
-// 辅助函数：临时挂载 ESP 分区
-// ============================================
-static BOOL MountESP(WCHAR* driveLetter)
-{
-    if (!driveLetter) {
-        return FALSE;
-    }
-
-    // 统一走 core 层逻辑，避免 UI 层与 core 层挂载行为不一致
-    return RefindMountESP(driveLetter, 4);
-}
-
-// ============================================
-// 辅助函数：卸载临时挂载的 ESP
-// ============================================
-static void UnmountESP(WCHAR driveLetter)
-{
-    WCHAR mountedDrive[4] = {driveLetter, L':', L'\0', L'\0'};
-    RefindUnmountESP(mountedDrive);
-}
-
-static BOOL ResolveRefindSourcePath(WCHAR* sourcePath, DWORD size)
-{
-    WCHAR exePath[MAX_PATH];
-    WCHAR exeDir[MAX_PATH];
-    WCHAR cwd[MAX_PATH];
-
-    if (!sourcePath || size == 0) return FALSE;
-    if (GetModuleFileNameW(NULL, exePath, MAX_PATH) == 0) return FALSE;
-
-    // 获取程序所在目录
-    wcsncpy(exeDir, exePath, MAX_PATH);
-    exeDir[MAX_PATH - 1] = L'\0';
-    WCHAR* lastSlash = wcsrchr(exeDir, L'\\');
-    if (lastSlash) *lastSlash = L'\0';
-
-    // 获取当前工作目录
-    GetCurrentDirectoryW(MAX_PATH, cwd);
-
-    // 按优先级搜索 rEFInd 源文件
-    // 1. <程序目录>\refind
-    // 2. <程序目录>\dist\refind
-    // 3. <当前工作目录>\refind
-    // 4. <当前工作目录>\dist\refind
-    // 5. <程序目录>\..\refind
-    // 6. <程序目录>\..\..\refind
-    // 7. .\refind (相对于工作目录)
-    WCHAR c0[MAX_PATH], c1[MAX_PATH], c2[MAX_PATH], c3[MAX_PATH], c4[MAX_PATH], c5[MAX_PATH], c6[MAX_PATH];
-    swprintf(c0, MAX_PATH, L"%s\\refind", exeDir);
-    swprintf(c1, MAX_PATH, L"%s\\dist\\refind", exeDir);
-    swprintf(c2, MAX_PATH, L"%s\\refind", cwd);
-    swprintf(c3, MAX_PATH, L"%s\\dist\\refind", cwd);
-    swprintf(c4, MAX_PATH, L"%s\\..\\refind", exeDir);
-    swprintf(c5, MAX_PATH, L"%s\\..\\..\\refind", exeDir);
-    swprintf(c6, MAX_PATH, L".\\refind");
-
-    const WCHAR* candidates[7] = { c0, c1, c2, c3, c4, c5, c6 };
-
-    {
-        WCHAR dbg[MAX_PATH + 64];
-        swprintf(dbg, MAX_PATH + 64, L"[rEFInd] exeDir=%s cwd=%s\n", exeDir, cwd);
-        OutputDebugStringW(dbg);
-    }
-
-    for (int i = 0; i < 7; ++i) {
-        WCHAR probe[MAX_PATH];
-        swprintf(probe, MAX_PATH, L"%s\\refind_x64.efi", candidates[i]);
-        {
-            WCHAR dbg[MAX_PATH + 64];
-            swprintf(dbg, MAX_PATH + 64, L"[rEFInd] probe[%d]=%s exists=%d\n",
-                i, probe, GetFileAttributesW(probe) != INVALID_FILE_ATTRIBUTES);
-            OutputDebugStringW(dbg);
-        }
-        if (GetFileAttributesW(probe) != INVALID_FILE_ATTRIBUTES) {
-            wcsncpy(sourcePath, candidates[i], size);
-            sourcePath[size - 1] = L'\0';
-            {
-                WCHAR dbg[MAX_PATH + 64];
-                swprintf(dbg, MAX_PATH + 64, L"[rEFInd] Found source at: %s\n", sourcePath);
-                OutputDebugStringW(dbg);
-            }
-            return TRUE;
-        }
-    }
-
-    OutputDebugStringW(L"[rEFInd] ResolveRefindSourcePath: not found in any candidate\n");
-    return FALSE;
-}
-
-static BOOL BrowseBackupFile(HWND hWnd, WCHAR* filePath, DWORD size)
-{
-    OPENFILENAMEW ofn = {0};
-    WCHAR backupDir[MAX_PATH] = {0};
-
-    if (!filePath || size == 0) {
-        return FALSE;
-    }
-
-    // 获取备份目录作为默认打开路径
-    BackupGetBackupDir(backupDir, MAX_PATH);
-
-    filePath[0] = L'\0';
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = hWnd;
-    ofn.lpstrFile = filePath;
-    ofn.nMaxFile = size;
-    ofn.lpstrFilter = L"备份文件 (*.bak;*.bin)\0*.bak;*.bin\0所有文件 (*.*)\0*.*\0";
-    ofn.lpstrTitle = L"选择备份文件（默认打开程序目录下的 backups 文件夹）";
-    ofn.lpstrInitialDir = backupDir;  // 默认打开备份目录
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-
-    return GetOpenFileNameW(&ofn);
-}
-
-static BOOL BrowseBackupFolder(HWND hWnd, WCHAR* folderPath, DWORD size)
-{
-    BROWSEINFOW bi = {0};
-    PIDLIST_ABSOLUTE pidl;
-    WCHAR backupDir[MAX_PATH] = {0};
-
-    if (!folderPath || size == 0) {
-        return FALSE;
-    }
-
-    // 获取默认备份目录
-    BackupGetBackupDir(backupDir, MAX_PATH);
-
-    folderPath[0] = L'\0';
-    bi.hwndOwner = hWnd;
-    bi.lpszTitle = L"选择备份目录（推荐使用程序目录下的 backups 文件夹）";
-    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-    
-    pidl = SHBrowseForFolderW(&bi);
-    if (!pidl) {
-        return FALSE;
-    }
-
-    if (!SHGetPathFromIDListW(pidl, folderPath)) {
-        CoTaskMemFree(pidl);
-        return FALSE;
-    }
-
-    CoTaskMemFree(pidl);
-    return TRUE;
-}
-
-static BOOL RestoreFromBackupPath(HWND hWnd, const WCHAR* selectedPath)
-{
-    const WCHAR* ext;
-    DWORD attrs;
-
-    if (!selectedPath || selectedPath[0] == L'\0') {
-        return FALSE;
-    }
-
-    attrs = GetFileAttributesW(selectedPath);
-    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        return RestoreAll(selectedPath, BACKUP_ALL);
-    }
-
-    ext = wcsrchr(selectedPath, L'.');
-    if (ext && _wcsicmp(ext, L".bin") == 0) {
-        return RestoreMBR(L"PhysicalDrive0", selectedPath);
-    }
-
-    if (wcsstr(selectedPath, L"NVRAM_") != NULL || wcsstr(selectedPath, L"nvram") != NULL) {
-        return RestoreNVRAM(selectedPath);
-    }
-
-    if (wcsstr(selectedPath, L"BCD_") != NULL || wcsstr(selectedPath, L"bcd") != NULL || (ext && _wcsicmp(ext, L".bak") == 0)) {
-        return RestoreBCD(selectedPath);
-    }
-
-    MessageBoxW(hWnd, L"无法判断备份类型，请选择 .bin(MBR) 或 .bak(BCD/NVRAM) 文件，或包含 mbr.bin/bcd.bak/nvram.bak 的备份目录。", L"提示", MB_OK | MB_ICONWARNING);
-    return FALSE;
-}
-
-// ============================================
-// 程序入口
-// ============================================
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
-{
-    (void)hPrev; (void)cmd;
-    
-    // 检查是否以管理员身份运行
-    BOOL isAdmin = FALSE;
-    PSID adminGroup = NULL;
-    SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
-    if (AllocateAndInitializeSid(&ntAuth, 2, SECURITY_BUILTIN_DOMAIN_RID, 
-        DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminGroup)) {
-        CheckTokenMembership(NULL, adminGroup, &isAdmin);
-        FreeSid(adminGroup);
-    }
-    
-    // 如果不是管理员，请求提升权限
-    if (!isAdmin) {
-        WCHAR exePath[MAX_PATH];
-        GetModuleFileNameW(NULL, exePath, MAX_PATH);
-        
-        SHELLEXECUTEINFOW sei = {0};
-        sei.cbSize = sizeof(sei);
-        sei.lpVerb = L"runas";
-        sei.lpFile = exePath;
-        sei.nShow = SW_SHOWNORMAL;
-        
-        if (ShellExecuteExW(&sei)) {
-            // 新进程已启动，退出当前进程
-            return 0;
-        }
-        
-        // UAC 提升失败（用户拒绝或其他原因）
-        // 继续运行但会提示用户操作受限
-    }
-    
-    InitCommonControls();
-    InitFonts();
-    
-    WNDCLASSEXW wc = {0};
-    wc.cbSize = sizeof(wc);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = MainWndProc;
-    wc.hInstance = hInst;
-    wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = CreateSolidBrush(COLOR_BG_MAIN);
-    wc.lpszClassName = L"BootManagerPro_Class";
-    wc.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
-    RegisterClassExW(&wc);
-    
-    int x = (GetSystemMetrics(SM_CXSCREEN) - WINDOW_WIDTH) / 2;
-    int y = (GetSystemMetrics(SM_CYSCREEN) - WINDOW_HEIGHT) / 2;
-    
-    g_hMainWnd = CreateWindowExW(0, L"BootManagerPro_Class", 
-        L"Boot Manager Pro v3",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-        x, y, WINDOW_WIDTH, WINDOW_HEIGHT, NULL, NULL, hInst, NULL);
-    
-    ShowWindow(g_hMainWnd, show);
-    UpdateWindow(g_hMainWnd);
-    
-    MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-    }
-    
-    if (g_bootList) UefiFreeBootList(g_bootList);
-    DeleteObject(g_fontTitle);
-    DeleteObject(g_fontBody);
-    DeleteObject(g_fontSmall);
-    return (int)msg.wParam;
-}
+static BOOL ResolveRefindSourcePath(WCHAR*, DWORD);
+static BOOL ResolveLimineSourcePath(WCHAR*, DWORD);
+static BOOL MountESP(WCHAR*);
+static BOOL UnmountESP(WCHAR);
 
 static void InitFonts(void)
 {
-    g_fontTitle = CreateFontW(20, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+    g_fontTitle = CreateFontW(20, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
     g_fontBody = CreateFontW(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -385,14 +128,343 @@ static void InitFonts(void)
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 }
 
-static void SetStatus(const WCHAR* text)
-{
-    if (g_hStatusText) SetWindowTextW(g_hStatusText, text);
+static void SetStatus(const WCHAR* text) { if (g_hStatusText) SetWindowTextW(g_hStatusText, text); }
+
+// ESP 挂载追踪
+static BOOL s_espMountedByUs = FALSE;
+static WCHAR s_espDriveLetter = 0;
+
+static BOOL MountESP(WCHAR* d) { 
+    BOOL mountedByUs = FALSE;
+    BOOL result = EspMountEx(d, 4, &mountedByUs);
+    if (result) {
+        s_espMountedByUs = mountedByUs;
+        s_espDriveLetter = d[0];
+    }
+    return result;
+}
+static BOOL UnmountESP(WCHAR d) {
+    WCHAR drive[4] = {d, L':', L'\0', 0};
+    // 仅当是我们挂载的才卸载
+    BOOL result = EspUnmountEx(drive, TRUE);
+    if (result) {
+        s_espMountedByUs = FALSE;
+        s_espDriveLetter = 0;
+    }
+    return result;
 }
 
+// rEFInd/Limine 页面静态变量和函数
+static HWND s_refindBtnInstall = NULL, s_refindBtnUninstall = NULL, s_refindStatus = NULL;
+static HWND s_limineBtnInstall = NULL, s_limineBtnUninstall = NULL, s_limineStatus = NULL;
+
 // ============================================
+// ESP 分区选择对话框
+// 让用户选择要安装到的 ESP 分区
+// ============================================
+typedef struct {
+    WCHAR driveLetter;      // 盘符 (如 'C')
+    WCHAR displayName[128]; // 显示名称
+    WCHAR volumeLabel[64];  // 卷标
+    WCHAR fsName[32];       // 文件系统
+    ULONGLONG totalSize;    // 总大小
+    DWORD diskNumber;       // 磁盘号
+    BOOL isESP;             // 是否是 ESP
+} ESP_PARTITION_INFO;
+
+static ESP_PARTITION_INFO* s_espPartitions = NULL;
+static int s_espPartitionCount = 0;
+static HWND s_espSelDialog = NULL;
+static HWND s_espSelCombo = NULL;
+static int s_espSelResult = -1;
+
+// 枚举所有 FAT32 分区（可能是 ESP）
+static int EnumEspPartitions(ESP_PARTITION_INFO** partitions)
+{
+    int count = 0;
+    int maxPartitions = 32;
+    
+    *partitions = (ESP_PARTITION_INFO*)calloc(maxPartitions, sizeof(ESP_PARTITION_INFO));
+    if (!*partitions) return 0;
+    
+    // 枚举所有盘符
+    WCHAR drives[512] = {0};
+    if (GetLogicalDriveStringsW(511, drives)) {
+        WCHAR* p = drives;
+        while (*p && count < maxPartitions) {
+            WCHAR root[4] = {p[0], L':', L'\\', 0};
+            
+            // 只处理固定磁盘和可移动磁盘
+            UINT type = GetDriveTypeW(root);
+            if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) {
+                p += wcslen(p) + 1;
+                continue;
+            }
+            
+            // 获取文件系统
+            WCHAR fsName[32] = {0};
+            WCHAR volumeLabel[64] = {0};
+            ULONGLONG totalBytes = 0;
+            
+            GetVolumeInformationW(root, volumeLabel, 64, NULL, NULL, NULL, fsName, 32);
+            GetDiskFreeSpaceExW(root, NULL, (PULARGE_INTEGER)&totalBytes, NULL);
+            
+            // 处理 FAT 系列（FAT12/FAT16/FAT32/exFAT 都可能是 ESP）
+            BOOL isFat = (_wcsicmp(fsName, L"FAT32") == 0 || 
+                          _wcsicmp(fsName, L"FAT") == 0 ||
+                          _wcsicmp(fsName, L"FAT16") == 0 ||
+                          _wcsicmp(fsName, L"FAT12") == 0);
+            
+            if (isFat) {
+                ESP_PARTITION_INFO* info = &(*partitions)[count];
+                info->driveLetter = p[0];
+                info->totalSize = totalBytes;
+                wcsncpy(info->fsName, fsName, 31);
+                wcsncpy(info->volumeLabel, volumeLabel, 63);
+                
+                // 检查是否是 ESP（有 EFI 目录）
+                WCHAR efiPath[MAX_PATH];
+                swprintf(efiPath, MAX_PATH, L"%s\\EFI", root);
+                info->isESP = (GetFileAttributesW(efiPath) != INVALID_FILE_ATTRIBUTES);
+                
+                // 获取磁盘号
+                WCHAR volPath[8] = {L'\\', L'\\', L'.', L'\\', p[0], L':', 0};
+                HANDLE hVol = CreateFileW(volPath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+                if (hVol != INVALID_HANDLE_VALUE) {
+                    VOLUME_DISK_EXTENTS extents = {0};
+                    DWORD bytesReturned = 0;
+                    if (DeviceIoControl(hVol, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, NULL, 0, &extents, sizeof(extents), &bytesReturned, NULL)) {
+                        info->diskNumber = extents.Extents[0].DiskNumber;
+                    }
+                    CloseHandle(hVol);
+                }
+                
+                // 构建显示名称
+                WCHAR sizeStr[32] = {0};
+                if (totalBytes >= 1024ULL * 1024 * 1024) {
+                    swprintf(sizeStr, 32, L"%.0fGB", (double)totalBytes / (1024.0 * 1024 * 1024));
+                } else {
+                    swprintf(sizeStr, 32, L"%.0fMB", (double)totalBytes / (1024.0 * 1024));
+                }
+                
+                if (volumeLabel[0]) {
+                    swprintf(info->displayName, 128, L"%c: %s (%s, %s)%s", 
+                        p[0], volumeLabel, sizeStr, fsName, 
+                        info->isESP ? L" [ESP]" : L"");
+                } else {
+                    swprintf(info->displayName, 128, L"%c: (%s, %s)%s", 
+                        p[0], sizeStr, fsName, 
+                        info->isESP ? L" [ESP]" : L"");
+                }
+                
+                count++;
+            }
+            
+            p += wcslen(p) + 1;
+        }
+    }
+    
+    s_espPartitions = *partitions;
+    s_espPartitionCount = count;
+    return count;
+}
+
+// ESP 选择对话框过程
+static LRESULT CALLBACK EspSelDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+        case WM_CREATE: {
+            RECT rc;
+            GetClientRect(hDlg, &rc);
+            int w = rc.right;
+            int y = 20;
+            HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            
+            // 提示文字
+            CreateWindowExW(0, L"STATIC", L"选择要安装到的 ESP 分区：", 
+                WS_CHILD | WS_VISIBLE, 20, y, w - 40, 24, hDlg, NULL, NULL, NULL);
+            y += 30;
+            
+            // 分区列表
+            s_espSelCombo = CreateWindowExW(0, L"COMBOBOX", NULL, 
+                WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL | CBS_SORT,
+                20, y, w - 40, 200, hDlg, NULL, NULL, NULL);
+            SendMessageW(s_espSelCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
+            
+            // 填充分区列表，优先显示 ESP 分区
+            int espIdx = -1;
+            for (int i = 0; i < s_espPartitionCount; i++) {
+                int idx = (int)SendMessageW(s_espSelCombo, CB_ADDSTRING, 0, (LPARAM)s_espPartitions[i].displayName);
+                SendMessageW(s_espSelCombo, CB_SETITEMDATA, idx, i);
+                if (s_espPartitions[i].isESP && espIdx < 0) {
+                    espIdx = idx;
+                }
+            }
+            
+            // 默认选中第一个 ESP 分区
+            if (espIdx >= 0) {
+                SendMessageW(s_espSelCombo, CB_SETCURSEL, espIdx, 0);
+            } else if (s_espPartitionCount > 0) {
+                SendMessageW(s_espSelCombo, CB_SETCURSEL, 0, 0);
+            }
+            
+            y += 40;
+            
+            // 提示信息
+            CreateWindowExW(0, L"STATIC", 
+                L"提示：ESP 分区通常标记为 [ESP]，是 UEFI 启动分区。\n"
+                L"如果没有 ESP 分区，请选择一个 FAT32 分区。",
+                WS_CHILD | WS_VISIBLE, 20, y, w - 40, 48, hDlg, NULL, NULL, NULL);
+            y += 60;
+            
+            // 按钮
+            CreateWindowExW(0, L"BUTTON", L"确定", 
+                WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                (w - 180) / 2, y, 80, 28, hDlg, (HMENU)IDOK, NULL, NULL);
+            CreateWindowExW(0, L"BUTTON", L"取消", 
+                WS_CHILD | WS_VISIBLE,
+                (w - 180) / 2 + 100, y, 80, 28, hDlg, (HMENU)IDCANCEL, NULL, NULL);
+            
+            return 0;
+        }
+        
+        case WM_COMMAND: {
+            switch (LOWORD(wParam)) {
+                case IDOK: {
+                    int sel = (int)SendMessageW(s_espSelCombo, CB_GETCURSEL, 0, 0);
+                    if (sel >= 0) {
+                        s_espSelResult = (int)SendMessageW(s_espSelCombo, CB_GETITEMDATA, sel, 0);
+                    }
+                    DestroyWindow(hDlg);
+                    return 0;
+                }
+                case IDCANCEL:
+                    s_espSelResult = -1;
+                    DestroyWindow(hDlg);
+                    return 0;
+            }
+            break;
+        }
+        
+        case WM_CLOSE:
+            s_espSelResult = -1;
+            DestroyWindow(hDlg);
+            return 0;
+    }
+    
+    return DefWindowProcW(hDlg, msg, wParam, lParam);
+}
+
+// 显示 ESP 选择对话框，返回选中的盘符
+// 返回 0 表示取消
+static WCHAR ShowEspSelectDialog(HWND hParent)
+{
+    // 枚举分区
+    ESP_PARTITION_INFO* partitions = NULL;
+    int count = EnumEspPartitions(&partitions);
+    
+    if (count == 0) {
+        MessageBoxW(hParent, L"未找到 FAT 格式分区\n\nESP 分区通常是 FAT16 或 FAT32 格式。\n如果 ESP 已挂载，请检查是否有 EFI 目录。", L"提示", MB_OK | MB_ICONWARNING);
+        return 0;
+    }
+    
+    if (count == 1) {
+        // 只有一个，直接返回
+        WCHAR result = partitions[0].driveLetter;
+        free(partitions);
+        s_espPartitions = NULL;
+        s_espPartitionCount = 0;
+        return result;
+    }
+    
+    // 注册窗口类
+    static BOOL registered = FALSE;
+    if (!registered) {
+        WNDCLASSEXW wc = {0};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = EspSelDlgProc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = L"EspSelectDlgClass";
+        RegisterClassExW(&wc);
+        registered = TRUE;
+    }
+    
+    // 创建对话框
+    s_espSelResult = -1;
+    HWND hDlg = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE,
+        L"EspSelectDlgClass", L"选择 ESP 分区",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        0, 0, 400, 220, hParent, NULL, GetModuleHandleW(NULL), NULL);
+    
+    if (!hDlg) {
+        free(partitions);
+        return 0;
+    }
+    
+    // 居中
+    RECT rcParent, rcDlg;
+    GetWindowRect(hParent, &rcParent);
+    GetWindowRect(hDlg, &rcDlg);
+    int x = rcParent.left + (rcParent.right - rcParent.left - (rcDlg.right - rcDlg.left)) / 2;
+    int y = rcParent.top + (rcParent.bottom - rcParent.top - (rcDlg.bottom - rcDlg.top)) / 2;
+    SetWindowPos(hDlg, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    
+    EnableWindow(hParent, FALSE);
+    ShowWindow(hDlg, SW_SHOW);
+    
+    // 消息循环
+    MSG msg;
+    while (IsWindow(hDlg) && GetMessageW(&msg, NULL, 0, 0)) {
+        if (!IsDialogMessageW(hDlg, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    
+    EnableWindow(hParent, TRUE);
+    SetForegroundWindow(hParent);
+    
+    WCHAR result = 0;
+    if (s_espSelResult >= 0 && s_espSelResult < s_espPartitionCount) {
+        result = s_espPartitions[s_espSelResult].driveLetter;
+    }
+    
+    free(partitions);
+    s_espPartitions = NULL;
+    s_espPartitionCount = 0;
+    
+    return result;
+}
+static HWND s_limineList = NULL;
+static HWND s_limineBtnRefresh = NULL;
+static HWND s_limineBtnAddEntry = NULL;
+static HWND s_limineBtnEditEntry = NULL;
+static HWND s_limineBtnDelEntry = NULL;
+
+// Limine 启动项结构
+typedef struct {
+    WCHAR name[128];
+    WCHAR protocol[32];
+    WCHAR path[MAX_PATH];
+    WCHAR cmdline[512];
+} LIMINE_CONF_ENTRY;
+
+static LIMINE_CONF_ENTRY s_limineEntries[64];
+static int s_limineEntryCount = 0;
+static WCHAR s_limineConfDir[MAX_PATH] = {0};
+
+static void BuildRefindControls(HWND hParent);
+static void BuildLimineControls(HWND hParent);
+static void RefindRefreshStatus(void);
+static void LimineRefreshStatus(void);
+static BOOL LoadLimineConfEntries(void);
+static BOOL SaveLimineConfEntries(void);
+static void RefreshLimineEntryList(void);
+static BOOL ShowLimineEditDialog(HWND hParent, LIMINE_CONF_ENTRY* entry, BOOL isAdd);
+
 // 主窗口过程
-// ============================================
 LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
@@ -409,753 +481,150 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return (LRESULT)CreateSolidBrush(COLOR_BG_MAIN);
     }
         
-    case WM_COMMAND:
-        switch (LOWORD(wParam)) {
-        case ID_NAV_UEFI: SwitchPage(0); break;
-        case ID_NAV_MBR: SwitchPage(1); break;
-        case ID_NAV_REFIND: SwitchPage(2); break;
-        case ID_NAV_BCD: SwitchPage(3); break;
-        case ID_NAV_BACKUP: SwitchPage(4); break;
-        case ID_NAV_ABOUT: SwitchPage(5); break;
+    case WM_COMMAND: {
+        WORD cmd = LOWORD(wParam);
         
-        case ID_BTN_REFRESH:
-            RefreshBootList();
-            SetStatus(L"✓ 列表已刷新");
-            break;
-
-        case ID_BTN_REFIND_REFRESH:
-            RefindPageRefresh();
-            SetStatus(L"✓ rEFInd 条目已刷新");
-            break;
-        
-        // 添加启动项 - 直接添加 EFI
-        case ID_BTN_ADD_ENTRY: {
-            WCHAR title[256] = {0};
-            WCHAR path[512] = {0};
-            WCHAR driveLetter[4] = {0};
-
-            if (!ShowAddEfiDialog(hWnd, title, path, driveLetter)) break;
-
-            if (wcslen(title) == 0 || wcslen(path) == 0) {
-                MessageBoxW(hWnd, L"请填写完整信息", L"提示", MB_OK | MB_ICONWARNING);
-                break;
-            }
-
-            SetStatus(L"正在添加...");
-
-            // Mount ESP
-            WCHAR espDrive[4] = {0};
-            if (!MountESP(espDrive)) {
-                MessageBoxW(hWnd, L"ESP 分区挂载失败\n\n请以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"挂载失败");
-                break;
-            }
-
-            // Check if file is on ESP
-            WCHAR finalPath[512] = {0};
-            WCHAR srcPath[512] = {0};
-            
-            if (path[0] == espDrive[0]) {
-                // File already on ESP
-                swprintf(finalPath, 512, L"\\%s", path + 2);
-            } else {
-                // Need to copy to ESP
-                wcsncpy(srcPath, path, 511);
-                
-                // Check source file
-                if (GetFileAttributesW(srcPath) == INVALID_FILE_ATTRIBUTES) {
-                    MessageBoxW(hWnd, L"源文件不存在", L"错误", MB_OK | MB_ICONERROR);
-                    UnmountESP(espDrive[0]);
-                    break;
-                }
-                
-                // Get base name for directory
-                WCHAR fileBaseName[64] = L"boot";
-                WCHAR* lastSlash = wcsrchr(path, L'\\');
-                if (lastSlash) {
-                    WCHAR fileName[128];
-                    wcsncpy(fileName, lastSlash + 1, 127);
-                    WCHAR* dot = wcsrchr(fileName, L'.');
-                    if (dot) *dot = L'\0';
-                    wcsncpy(fileBaseName, fileName, 63);
-                }
-                
-                // Create directories
-                WCHAR efiRoot[MAX_PATH];
-                swprintf(efiRoot, MAX_PATH, L"%s\\EFI", espDrive);
-                CreateDirectoryW(efiRoot, NULL);
-                
-                WCHAR destDir[MAX_PATH];
-                swprintf(destDir, MAX_PATH, L"%s\\EFI\\%s", espDrive, fileBaseName);
-                CreateDirectoryW(destDir, NULL);
-                
-                // Destination filename
-                WCHAR destFileName[128] = L"boot.efi";
-                if (lastSlash) wcsncpy(destFileName, lastSlash + 1, 127);
-                
-                swprintf(finalPath, 512, L"\\EFI\\%s\\%s", fileBaseName, destFileName);
-                WCHAR destPath[MAX_PATH];
-                swprintf(destPath, MAX_PATH, L"%s%s", espDrive, finalPath);
-                
-                // Copy file
-                if (!CopyFileW(srcPath, destPath, FALSE)) {
-                    MessageBoxW(hWnd, L"复制文件失败", L"错误", MB_OK | MB_ICONERROR);
-                    UnmountESP(espDrive[0]);
-                    break;
-                }
-            }
-
-            // Add to NVRAM
-            DWORD newId = 0;
-            BOOL addOk = UefiAddBootEntry(title, NULL, finalPath, &newId);
-
-            UnmountESP(espDrive[0]);
-
-            if (addOk) {
-                WCHAR msg[256];
-                swprintf(msg, 256, L"添加成功！\n\n名称：%s\n路径：%s\nBootID: %04X", title, finalPath, newId);
-                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"添加成功");
-                RefreshBootList();
-            } else {
-                MessageBoxW(hWnd, L"添加失败\n\n请以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"添加失败");
-            }
-            break;
+        // 导航
+        if (cmd >= ID_NAV_BOOT_MGR && cmd <= ID_NAV_ABOUT) {
+            SwitchPage(cmd - ID_NAV_BOOT_MGR);
+            return 0;
         }
         
-        case ID_MENU_ADD_EFI: {
-            // 根据当前页面决定添加到哪里
-            if (g_currentPage == 1) {
-                // rEFInd 页面 - 添加到 rEFInd menuentry
-                RefindPageAddEfi(hWnd);
-                break;
-            }
+        switch (cmd) {
+        // UEFI 按钮
+        case ID_BTN_REFRESH: RefreshBootList(); SetStatus(L"✓ 已刷新"); break;
+        
+        case ID_BTN_ADD_ENTRY: {
+            WCHAR title[256] = {0}, path[512] = {0}, driveLetter[4] = {0};
+            BOOL hasEsp = FALSE;
+            extern BOOL ShowAddEfiDialog(HWND, WCHAR*, WCHAR*, WCHAR*, BOOL*);
+            if (!ShowAddEfiDialog(hWnd, title, path, driveLetter, &hasEsp)) break;
+            if (wcslen(title) == 0 || wcslen(path) == 0) { MessageBoxW(hWnd, L"请填写完整信息", L"提示", MB_OK); break; }
             
-            // 其他页面 - 添加到 UEFI NVRAM
-            WCHAR title[256] = {0};
-            WCHAR path[512] = {0};
-            WCHAR driveLetter[4] = {0};
-
-            if (!ShowAddEfiDialog(hWnd, title, path, driveLetter)) {
-                break;
-            }
-
-            if (wcslen(title) == 0 || wcslen(path) == 0) {
-                MessageBoxW(hWnd, L"请填写完整信息", L"提示", MB_OK | MB_ICONWARNING);
-                break;
-            }
-
-            SetStatus(L"正在添加 EFI 启动项...");
-
-            {
-                WCHAR dbg[768];
-                swprintf(dbg, 768, L"[EFI Add] title=%s path=%s driveLetter=%s\n", title, path, driveLetter);
-                OutputDebugStringW(dbg);
-            }
-
-            WCHAR fullPath[512] = {0};
-            WCHAR mountedEsp[4] = {0};
-            BOOL espMountedForAdd = FALSE;
-            // devicePath: 优先使用对话框返回的 ESP 盘符，否则从文件路径推导
-            WCHAR devicePath[32] = {0};
-
-            if (path[0] == L'\\' && path[1] == L'\\') {
-                MessageBoxW(hWnd, L"不支持 UNC 网络路径\n\n请选择本地 EFI 文件", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 添加失败：路径格式错误");
-                break;
-            } else if (path[1] == L':') {
-                // 已经是绝对路径（用户通过浏览选择）
-                wcsncpy(fullPath, path, 511);
-                // device 从文件路径的盘符推导（文件在哪个分区就用哪个）
-                swprintf(devicePath, 32, L"partition=%c:", path[0]);
-            } else if (path[0] == L'\\') {
-                // 相对路径（如 \EFI\xxx.efi）
-                // 优先使用对话框返回的 ESP 盘符
-                if (wcslen(driveLetter) >= 2) {
-                    swprintf(fullPath, 512, L"%s%s", driveLetter, path);
-                    swprintf(devicePath, 32, L"partition=%c:", driveLetter[0]);
-                    OutputDebugStringW(L"[EFI Add] Using dialog driveLetter for relative path\n");
+            WCHAR fullPath[512] = {0}, esp[4] = {0}, efiPath[512] = {0};
+            BOOL mounted = FALSE;
+            BOOL needCopy = FALSE;  // 是否需要复制文件到 ESP
+            
+            if (path[1] == L':') {
+                // 绝对路径 - 检查是否在 ESP 上
+                wcscpy(fullPath, path);
+                
+                // 检查是否在已知 ESP 盘符上
+                if (driveLetter[0] && path[0] == driveLetter[0]) {
+                    // 在选中的 ESP 分区上
+                    swprintf(efiPath, 512, L"\\%s", path + 3);  // 去掉盘符
                 } else {
-                    // 没有盘符，挂载 ESP
-                    if (!MountESP(mountedEsp)) {
-                        MessageBoxW(hWnd,
-                            L"ESP 分区挂载失败\n\n"
-                            L"可能原因：\n"
-                            L"1. 程序未以管理员身份运行\n"
-                            L"2. 系统未使用 UEFI 启动模式\n\n"
-                            L"请右键程序选择「以管理员身份运行」",
-                            L"错误", MB_OK | MB_ICONERROR);
-                        SetStatus(L"✗ 添加失败：挂载失败");
+                    // 不在 ESP 上，需要复制
+                    needCopy = TRUE;
+                }
+            } else if (path[0] == L'\\') {
+                // 相对路径
+                if (driveLetter[0]) {
+                    swprintf(fullPath, 512, L"%s%s", driveLetter, path);
+                    wcscpy(efiPath, path);
+                } else {
+                    // 没有选择 ESP 分区，尝试挂载
+                    if (!MountESP(esp)) {
+                        MessageBoxW(hWnd, L"未检测到 ESP 分区\n\nUEFI 启动项必须位于 ESP 分区上", L"错误", MB_OK | MB_ICONERROR);
                         break;
                     }
-                    espMountedForAdd = TRUE;
-                    swprintf(fullPath, 512, L"%s%s", mountedEsp, path);
-                    swprintf(devicePath, 32, L"partition=%c:", mountedEsp[0]);
+                    mounted = TRUE;
+                    swprintf(fullPath, 512, L"%s%s", esp, path);
+                    wcscpy(efiPath, path);
                 }
             } else {
-                wcsncpy(fullPath, path, 511);
-            }
-
-            fullPath[511] = L'\0';
-
-            {
-                WCHAR dbg[768];
-                swprintf(dbg, 768, L"[EFI Add] fullPath=%s devicePath=%s\n", fullPath, devicePath);
-                OutputDebugStringW(dbg);
-            }
-
-            // 检查文件是否存在
-            if (GetFileAttributesW(fullPath) == INVALID_FILE_ATTRIBUTES) {
-                DWORD err = GetLastError();
-                WCHAR errMsg[640];
-                swprintf(errMsg, 640, L"EFI 文件不存在\n\n路径：%s\n错误码：%lu\n\n请确认文件路径正确。", fullPath, err);
-                MessageBoxW(hWnd, errMsg, L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 添加失败：文件不存在");
-                if (espMountedForAdd) UnmountESP(mountedEsp[0]);
+                // 无效路径格式
+                MessageBoxW(hWnd, L"路径格式无效\n\n请使用绝对路径（如 C:\\path\\file.efi）或 EFI 相对路径（如 \\EFI\\Boot\\bootx64.efi）", L"错误", MB_OK | MB_ICONERROR);
                 break;
             }
-
-            // 添加到 UEFI 启动项列表
+            
+            if (GetFileAttributesW(fullPath) == INVALID_FILE_ATTRIBUTES) {
+                MessageBoxW(hWnd, L"EFI 文件不存在", L"错误", MB_OK | MB_ICONERROR);
+                if (mounted) UnmountESP(esp[0]);
+                break;
+            }
+            
+            // 如果需要复制到 ESP
+            if (needCopy) {
+                if (!MountESP(esp)) {
+                    MessageBoxW(hWnd, L"未检测到 ESP 分区\n\nUEFI 启动项必须位于 ESP 分区上", L"错误", MB_OK | MB_ICONERROR);
+                    break;
+                }
+                mounted = TRUE;
+                
+                // 提取文件名（不含扩展名）作为目录名
+                const WCHAR* fileName = wcsrchr(fullPath, L'\\');
+                if (!fileName) fileName = fullPath;
+                else fileName++;
+                
+                WCHAR dirName[64] = {0};
+                wcsncpy(dirName, fileName, 63);
+                WCHAR* dot = wcsrchr(dirName, L'.');
+                if (dot) *dot = L'\0';
+                
+                // 构建目标目录和路径
+                WCHAR destDir[MAX_PATH], destPath[MAX_PATH];
+                swprintf(destDir, MAX_PATH, L"%s\\EFI\\%s", esp, dirName);
+                swprintf(destPath, MAX_PATH, L"%s\\%s", destDir, fileName);
+                swprintf(efiPath, 512, L"\\EFI\\%s\\%s", dirName, fileName);
+                
+                // 创建目录（递归创建父目录）
+                WCHAR parentDir[MAX_PATH];
+                wcscpy(parentDir, destDir);
+                WCHAR* p = parentDir + 3;
+                while (*p) {
+                    if (*p == L'\\') {
+                        *p = L'\0';
+                        CreateDirectoryW(parentDir, NULL);
+                        *p = L'\\';
+                    }
+                    p++;
+                }
+                CreateDirectoryW(destDir, NULL);
+                
+                // 复制文件
+                if (!CopyFileW(fullPath, destPath, FALSE)) {
+                    MessageBoxW(hWnd, L"复制 EFI 文件到 ESP 失败", L"错误", MB_OK | MB_ICONERROR);
+                    if (mounted) UnmountESP(esp[0]);
+                    break;
+                }
+            }
+            
+            // 最终检查：确保有有效的 EFI 路径
+            if (efiPath[0] == L'\0') {
+                MessageBoxW(hWnd, L"无法确定 EFI 路径\n\n请确保选择了有效的 ESP 分区", L"错误", MB_OK | MB_ICONERROR);
+                if (mounted) UnmountESP(esp[0]);
+                break;
+            }
+            
+            WCHAR device[32] = L"";
+            // device 参数暂时不用，UefiAddBootEntry 会自动处理
+            
             DWORD newId = 0;
-            BOOL addOk = UefiAddBootEntry(title, devicePath, fullPath, &newId);
-
-            if (espMountedForAdd) UnmountESP(mountedEsp[0]);
-
-            if (addOk) {
-                WCHAR msg[768];
-                swprintf(msg, 768,
-                    L"✓ EFI 启动项添加成功！\n\n"
-                    L"名称：%s\n"
-                    L"路径：%s\n\n"
-                    L"启动项已添加到 UEFI 启动列表，\n"
-                    L"可在 BIOS/UEFI 设置中调整启动顺序。",
-                    title, fullPath);
-                MessageBoxW(hWnd, msg, L"添加成功", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ 启动项已添加到 UEFI 列表");
+            if (UefiAddBootEntry(title, device, efiPath, &newId)) {
+                WCHAR msg[128];
+                swprintf(msg, 128, L"添加成功\nBootID: %04X", newId);
+                MessageBoxW(hWnd, msg, L"完成", MB_OK);
                 RefreshBootList();
             } else {
-                DWORD err = GetLastError();
-                WCHAR errMsg[512];
-                swprintf(errMsg, 512,
-                    L"添加 EFI 启动项失败\n\n"
-                    L"错误代码：%lu\n\n"
-                    L"可能原因：\n"
-                    L"1. 程序未以管理员身份运行\n"
-                    L"2. BCD 存储损坏\n"
-                    L"3. 路径格式不正确\n\n"
-                    L"请右键程序选择「以管理员身份运行」",
-                    err);
-                MessageBoxW(hWnd, errMsg, L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 添加失败");
+                MessageBoxW(hWnd, L"添加失败\n请以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
             }
+            if (mounted) UnmountESP(esp[0]);
             break;
         }
         
-        case ID_MENU_ADD_WIM: {
-            // 根据当前页面决定添加到哪里
-            if (g_currentPage == 1) {
-                // rEFInd 页面 - 添加到 rEFInd menuentry
-                RefindPageAddWim(hWnd);
-            } else {
-                // 其他页面 - 添加到 BCD
-                WCHAR wimPath[MAX_PATH] = {0};
-                if (!WimSelectFileDialog(hWnd, wimPath, MAX_PATH)) break;
-                
-                WCHAR defaultName[MAX_PATH];
-                const WCHAR* lastNameSep = wcsrchr(wimPath, L'\\');
-                if (lastNameSep) {
-                    wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
-                    WCHAR* dot = wcschr(defaultName, L'.');
-                    if (dot) *dot = L'\0';
-                } else {
-                    wcsncpy(defaultName, L"Windows PE", MAX_PATH);
-                }
-                
-                SetStatus(L"⏳ 正在添加 WIM 菜单项...");
-                if (WimAddBootEntry(defaultName, wimPath, L"1")) {
-                    WCHAR msg[MAX_PATH + 64];
-                    swprintf(msg, MAX_PATH + 64, L"WIM 菜单项添加成功!\n\n名称：%s\n路径：%s", defaultName, wimPath);
-                    MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                    SetStatus(L"✓ WIM 菜单项已添加");
-                    RefreshBootList();
-                } else {
-                    MessageBoxW(hWnd, L"WIM 菜单项添加失败", L"错误", MB_OK | MB_ICONERROR);
-                    SetStatus(L"✗ 添加失败");
-                }
-            }
-            break;
-        }
-        
-        // 菜单项处理 - 添加 VHD 启动
-        case ID_MENU_ADD_VHD: {
-            // 根据当前页面决定添加到哪里
-            if (g_currentPage == 1) {
-                // rEFInd 页面 - 添加到 rEFInd menuentry
-                RefindPageAddVhd(hWnd);
-            } else {
-                // 其他页面 - 添加到 BCD
-                WCHAR vhdPath[MAX_PATH] = {0};
-                if (!VhdSelectFileDialog(hWnd, vhdPath, MAX_PATH)) break;
-                
-                WCHAR defaultName[MAX_PATH];
-                const WCHAR* lastNameSep = wcsrchr(vhdPath, L'\\');
-                if (lastNameSep) {
-                    wcsncpy(defaultName, lastNameSep + 1, MAX_PATH);
-                    WCHAR* dot = wcschr(defaultName, L'.');
-                    if (dot) *dot = L'\0';
-                } else {
-                    wcsncpy(defaultName, L"VHD Windows", MAX_PATH);
-                }
-                
-                SetStatus(L"⏳ 正在添加 VHD 菜单项...");
-                if (VhdAddBootEntry(defaultName, vhdPath)) {
-                    WCHAR msg[MAX_PATH + 64];
-                    swprintf(msg, MAX_PATH + 64, L"VHD 菜单项添加成功!\n\n名称：%s\n路径：%s", defaultName, vhdPath);
-                    MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                    SetStatus(L"✓ VHD 菜单项已添加");
-                    RefreshBootList();
-                } else {
-                    MessageBoxW(hWnd, L"VHD 菜单项添加失败", L"错误", MB_OK | MB_ICONERROR);
-                    SetStatus(L"✗ 添加失败");
-                }
-            }
-            break;
-        }
-            
-        case ID_BTN_INSTALL: {
-            SetStatus(L"⏳ 正在准备安装...");
-            UpdateWindow(hWnd);
-            
-            // 临时挂载 ESP
-            WCHAR espDrive[4] = {0};
-            if (!MountESP(espDrive)) {
-                MessageBoxW(hWnd, 
-                    L"ESP 分区挂载失败\n\n"
-                    L"可能原因：\n"
-                    L"1. 程序未以管理员身份运行\n"
-                    L"2. 系统未使用 UEFI 启动模式\n"
-                    L"3. ESP 分区不存在或已损坏\n\n"
-                    L"请右键程序选择「以管理员身份运行」",
-                    L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 挂载失败");
-                break;
-            }
-
-            SetStatus(L"⏳ 正在安装 rEFInd...");
-            UpdateWindow(hWnd);
-
-            // 检查源文件
-            WCHAR resolvedSourcePath[MAX_PATH];
-            if (!ResolveRefindSourcePath(resolvedSourcePath, MAX_PATH)) {
-                UnmountESP(espDrive[0]);
-                MessageBoxW(hWnd, 
-                    L"未找到 rEFInd 源文件\n\n"
-                    L"搜索路径：\n"
-                    L"• <程序目录>\\refind\n"
-                    L"• <程序目录>\\dist\\refind\n"
-                    L"• <程序目录>\\..\\refind\n"
-                    L"• <程序目录>\\..\\..\\refind\n"
-                    L"• Z:\\refind\n"
-                    L"• .\\refind\n\n"
-                    L"请将 rEFInd 文件夹放入以上任一路径，\n"
-                    L"确保包含 refind_x64.efi 文件。",
-                    L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 源文件缺失");
-                break;
-            }
-
-            BOOL success = RefindInstall(resolvedSourcePath, espDrive);
-
-            {
-                WCHAR dbg[MAX_PATH + 64];
-                swprintf(dbg, MAX_PATH + 64, L"[rEFInd] Install result=%d source=%s esp=%s\n",
-                    success, resolvedSourcePath, espDrive);
-                OutputDebugStringW(dbg);
-            }
-
-            if (success) {
-                MessageBoxW(hWnd, 
-                    L"rEFInd 安装成功！\n\n"
-                    L"重启后将显示 rEFInd 启动菜单。\n\n"
-                    L"如需添加自定义启动项，请在「启动项管理」\n"
-                    L"页面点击「添加引导」→「添加 EFI 菜单项」",
-                    L"安装完成", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ rEFInd 安装成功");
-                // 禁用安装按钮，防止重复安装
-                RefindPageSetInstalled(TRUE);
-            } else {
-                const WCHAR* err = RefindGetLastErrorMessage();
-                WCHAR failMsg[1024];
-                swprintf(failMsg, 1024, 
-                    L"安装失败\n\n"
-                    L"错误: %s\n\n"
-                    L"可能原因：\n"
-                    L"1. ESP 分区空间不足\n"
-                    L"2. 文件被其他程序锁定\n"
-                    L"3. 权限不足\n\n"
-                    L"请确保以管理员身份运行本程序。",
-                    (err && wcslen(err) > 0) ? err : L"未知错误");
-                MessageBoxW(hWnd, failMsg, L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 安装失败");
-            }
-
-            UnmountESP(espDrive[0]);
-            break;
-        }
-        
-        case ID_BTN_UNINSTALL: {
-            if (MessageBoxW(hWnd, L"确定卸载 rEFInd？\n\n将恢复 Windows 引导。", L"确认", MB_YESNO | MB_ICONQUESTION) != IDYES)
-                break;
-            
-            SetStatus(L"⏳ 正在卸载...");
-            UpdateWindow(hWnd);
-            
-            // 临时挂载 ESP
-            WCHAR espDrive[4] = {0};
-            if (!MountESP(espDrive)) {
-                MessageBoxW(hWnd, L"ESP 分区挂载失败", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 挂载失败");
-                break;
-            }
-
-            BOOL success = RefindUninstall(espDrive);
-            
-            if (success) {
-                MessageBoxW(hWnd, L"rEFInd 已卸载\n\n将恢复 Windows 引导。", L"完成", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ 卸载成功");
-                // 重新启用安装按钮
-                RefindPageSetInstalled(FALSE);
-            } else {
-                const WCHAR* err = RefindGetLastErrorMessage();
-                WCHAR failMsg[1024];
-                swprintf(failMsg, 1024, L"卸载失败\n\n错误: %s", (err && wcslen(err) > 0) ? err : L"未知错误");
-                MessageBoxW(hWnd, failMsg, L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 卸载失败");
-            }
-
-            UnmountESP(espDrive[0]);
-            break;
-        }
-
-        case ID_BTN_REFIND_DELETE:
-            RefindPageDeleteSelected(hWnd);
-            break;
-        
-        case 2701:  // ID_BTN_REFRESH
-        case 2702:  // ID_BTN_DELETE
-        case 2703:  // ID_BTN_SET_DEFAULT
-        case 2704:  // ID_BTN_ADD
-        case 2705:  // ID_BTN_MBR_MODE
-        case 2801:  // ID_MENU_WIM
-        case 2802:  // ID_MENU_VHD
-        case 2803:  // ID_MENU_RAM
-        case 2804:  // ID_MENU_WINPE
-        case 2805:  // ID_MENU_ESD
-        case 2806:  // ID_MENU_ISO
-            BcdPageCommand(hWnd, wParam);
-            break;
-        
-        case ID_BTN_BACKUP_MBR: {
-            SYSTEMTIME st; GetLocalTime(&st);
-            WCHAR backupDir[MAX_PATH] = {0};
-            WCHAR file[MAX_PATH] = {0};
-            
-            // 获取程序目录下的 backups 文件夹
-            if (!BackupGetBackupDir(backupDir, MAX_PATH)) {
-                MessageBoxW(hWnd, L"无法创建备份目录", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 备份失败");
-                break;
-            }
-            
-            swprintf(file, MAX_PATH, L"%s\\MBR_%04d%02d%02d_%02d%02d%02d.bin",
-                backupDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-            
-            SetStatus(L"⏳ 备份 MBR 中...");
-            
-            if (BackupMBR(L"PhysicalDrive0", file)) {
-                WCHAR msg[MAX_PATH + 128];
-                swprintf(msg, MAX_PATH + 128, 
-                    L"MBR 备份成功！\n\n"
-                    L"备份位置:\n%s\n\n"
-                    L"提示：备份文件保存在程序目录的 backups 文件夹中。",
-                    file);
-                MessageBoxW(hWnd, msg, L"备份成功", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ MBR 已备份到 backups 文件夹");
-            } else {
-                MessageBoxW(hWnd, L"备份失败，需要管理员权限", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 备份失败");
-            }
-            break;
-        }
-        
-        case ID_BTN_BACKUP_BCD: {
-            SYSTEMTIME st; GetLocalTime(&st);
-            WCHAR backupDir[MAX_PATH] = {0};
-            WCHAR file[MAX_PATH] = {0};
-            
-            if (!BackupGetBackupDir(backupDir, MAX_PATH)) {
-                MessageBoxW(hWnd, L"无法创建备份目录", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 备份失败");
-                break;
-            }
-            
-            swprintf(file, MAX_PATH, L"%s\\BCD_%04d%02d%02d_%02d%02d%02d.bak",
-                backupDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-            
-            SetStatus(L"⏳ 备份 BCD 中...");
-            
-            if (BackupBCD(file)) {
-                WCHAR msg[MAX_PATH + 128];
-                swprintf(msg, MAX_PATH + 128, 
-                    L"BCD 备份成功！\n\n"
-                    L"备份位置:\n%s\n\n"
-                    L"提示：备份文件保存在程序目录的 backups 文件夹中。",
-                    file);
-                MessageBoxW(hWnd, msg, L"备份成功", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ BCD 已备份到 backups 文件夹");
-            } else {
-                MessageBoxW(hWnd, L"备份失败，需要管理员权限", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 备份失败");
-            }
-            break;
-        }
-        
-        case ID_BTN_RESTORE: {
-            WCHAR selectedPath[MAX_PATH] = {0};
-            int pickMode = MessageBoxW(hWnd, L"选择要恢复的备份来源：\n\n是：选择单个备份文件\n否：选择完整备份目录", L"恢复备份", MB_YESNOCANCEL | MB_ICONQUESTION);
-
-            if (pickMode == IDCANCEL) {
-                break;
-            }
-
-            if (pickMode == IDYES) {
-                if (!BrowseBackupFile(hWnd, selectedPath, MAX_PATH)) {
-                    break;
-                }
-            } else {
-                if (!BrowseBackupFolder(hWnd, selectedPath, MAX_PATH)) {
-                    break;
-                }
-            }
-
-            if (MessageBoxW(hWnd, L"恢复引导备份可能直接影响系统启动，确定继续？", L"确认恢复", MB_YESNO | MB_ICONWARNING) != IDYES) {
-                break;
-            }
-
-            SetStatus(L"⏳ 正在恢复备份...");
-            if (RestoreFromBackupPath(hWnd, selectedPath)) {
-                WCHAR msg[MAX_PATH + 64];
-                swprintf(msg, MAX_PATH + 64, L"恢复成功:\n%s", selectedPath);
-                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ 恢复完成");
-            } else {
-                MessageBoxW(hWnd, L"恢复失败，请确认备份文件存在且已使用管理员权限运行。", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 恢复失败");
-            }
-            break;
-        }
-
-        case ID_BTN_MBR_REPAIR: {
-            if (MessageBoxW(hWnd,
-                L"⚠️ 高风险操作：MBR 修复\n\n"
-                L"将使用 bootrec /fixmbr 恢复 Windows 默认 MBR 引导代码。\n"
-                L"分区表不会被修改，但当前 MBR 引导代码将被覆盖。\n\n"
-                L"建议操作前先备份 MBR。确定继续？",
-                L"确认 MBR 修复", MB_YESNO | MB_ICONWARNING) != IDYES) break;
-
-            SetStatus(L"⏳ 正在修复 MBR...");
-            UpdateWindow(hWnd);
-
-            SHELLEXECUTEINFOW sei = {0};
-            sei.cbSize = sizeof(sei);
-            sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-            sei.lpVerb = L"runas";
-            sei.lpFile = L"cmd.exe";
-            sei.lpParameters = L"/c bootrec /fixmbr";
-            sei.nShow = SW_HIDE;
-
-            if (ShellExecuteExW(&sei)) {
-                WaitForSingleObject(sei.hProcess, 30000);
-                DWORD exitCode = 1;
-                GetExitCodeProcess(sei.hProcess, &exitCode);
-                CloseHandle(sei.hProcess);
-                if (exitCode == 0) {
-                    MessageBoxW(hWnd, L"MBR 修复完成\n\n重启后生效。", L"完成", MB_OK | MB_ICONINFORMATION);
-                    SetStatus(L"✓ MBR 已修复");
-                } else {
-                    MessageBoxW(hWnd, L"MBR 修复失败\n\n请确保以管理员身份运行，或在 Windows PE 环境下执行。", L"错误", MB_OK | MB_ICONERROR);
-                    SetStatus(L"✗ MBR 修复失败");
-                }
-            } else {
-                MessageBoxW(hWnd, L"无法启动修复进程，请确保以管理员身份运行。", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 启动失败");
-            }
-            break;
-        }
-
-        case ID_BTN_UEFI_REPAIR: {
-            if (MessageBoxW(hWnd,
-                L"UEFI 引导修复\n\n"
-                L"将检查 ESP 分区并尝试恢复 Windows 默认 UEFI 引导链：\n"
-                L"• 执行 bootrec /fixboot\n"
-                L"• 执行 bcdboot C:\\Windows /s <ESP> /f UEFI\n\n"
-                L"如果 Windows 安装在非 C: 盘，修复可能不完整。\n"
-                L"确定继续？",
-                L"确认 UEFI 修复", MB_YESNO | MB_ICONQUESTION) != IDYES) break;
-
-            SetStatus(L"⏳ 正在修复 UEFI 引导...");
-            UpdateWindow(hWnd);
-
-            /* Step 1: mount ESP */
-            WCHAR espDrive[4] = {0};
-            BOOL espMounted = EspMount(espDrive, 4);
-
-            /* Step 2: bootrec /fixboot */
-            BOOL fixbootOk = FALSE;
-            {
-                SHELLEXECUTEINFOW sei = {0};
-                sei.cbSize = sizeof(sei);
-                sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-                sei.lpVerb = L"runas";
-                sei.lpFile = L"cmd.exe";
-                sei.lpParameters = L"/c bootrec /fixboot";
-                sei.nShow = SW_HIDE;
-                if (ShellExecuteExW(&sei)) {
-                    WaitForSingleObject(sei.hProcess, 30000);
-                    DWORD ec = 1; GetExitCodeProcess(sei.hProcess, &ec);
-                    CloseHandle(sei.hProcess);
-                    fixbootOk = (ec == 0);
-                }
-            }
-
-            /* Step 3: bcdboot to restore EFI\Microsoft\Boot */
-            BOOL bcdbootOk = FALSE;
-            if (espMounted && espDrive[0]) {
-                WCHAR params[128];
-                swprintf(params, 128, L"/c bcdboot C:\\Windows /s %c: /f UEFI", espDrive[0]);
-                SHELLEXECUTEINFOW sei = {0};
-                sei.cbSize = sizeof(sei);
-                sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-                sei.lpVerb = L"runas";
-                sei.lpFile = L"cmd.exe";
-                sei.lpParameters = params;
-                sei.nShow = SW_HIDE;
-                if (ShellExecuteExW(&sei)) {
-                    WaitForSingleObject(sei.hProcess, 30000);
-                    DWORD ec = 1; GetExitCodeProcess(sei.hProcess, &ec);
-                    CloseHandle(sei.hProcess);
-                    bcdbootOk = (ec == 0);
-                }
-                EspUnmount(espDrive);
-            }
-
-            if (fixbootOk || bcdbootOk) {
-                MessageBoxW(hWnd,
-                    L"UEFI 引导修复完成\n\n"
-                    L"如果问题仍然存在，请使用 Windows 安装盘进入修复模式，\n"
-                    L"选择「修复计算机」→「疑难解答」→「启动修复」。",
-                    L"完成", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ UEFI 引导已修复");
-            } else {
-                MessageBoxW(hWnd,
-                    L"UEFI 修复未能完全完成\n\n"
-                    L"手动修复方法：\n"
-                    L"1. 使用 Windows 安装盘启动\n"
-                    L"2. 选择「修复计算机」→「疑难解答」→「命令提示符」\n"
-                    L"3. 执行：bootrec /fixboot\n"
-                    L"4. 执行：bcdboot C:\\Windows /s <ESP盘符>: /f UEFI",
-                    L"提示", MB_OK | MB_ICONWARNING);
-                SetStatus(L"⚠ 请参考手动修复指引");
-            }
-            break;
-        }
-        
-        // UEFI 启动项管理
         case ID_BTN_DELETE_ENTRY: {
-            if (!g_hListView || !g_bootList) break;
-            
+            if (!g_hListView) break;
             int sel = ListView_GetNextItem(g_hListView, -1, LVNI_SELECTED);
-            if (sel == -1) {
-                MessageBoxW(hWnd, L"请先选择一个启动项", L"提示", MB_OK | MB_ICONINFORMATION);
-                break;
-            }
+            if (sel == -1) { MessageBoxW(hWnd, L"请先选择", L"提示", MB_OK); break; }
             
             WCHAR idText[16] = {0};
-            WCHAR name[256] = {0};
-            WCHAR efiPath[512] = {0};
-            WCHAR msg[512];
-            DWORD id;
-            UEFI_BOOT_ENTRY_WRAPPER* entry;
-            BOOL deleted;
-            WCHAR* efiStart;
-            WCHAR* slash;
-            int len;
-            WCHAR dirName[64] = {0};
-            WCHAR espDrive[4] = {0};
-            WCHAR delDir[MAX_PATH];
-            WCHAR cmd[MAX_PATH];
-            
             ListView_GetItemText(g_hListView, sel, 0, idText, 16);
-            id = wcstoul(idText, NULL, 16);
+            DWORD id = wcstoul(idText, NULL, 16);
             
-            // 从 g_bootList 获取路径
-            entry = g_bootList->entries;
-            while (entry) {
-                if (entry->id == id) {
-                    wcsncpy(efiPath, entry->filePath, 511);
-                    break;
-                }
-                entry = entry->next;
+            if (MessageBoxW(hWnd, L"确定删除？", L"确认", MB_YESNO) == IDYES) {
+                if (UefiDeleteBootEntry(id)) { RefreshBootList(); SetStatus(L"✓ 已删除"); }
             }
-            
-            ListView_GetItemText(g_hListView, sel, 1, name, 256);
-            
-            swprintf(msg, 512, L"确定删除启动项？\n\n名称：%s\nID: %04X", name, id);
-            
-            if (MessageBoxW(hWnd, msg, L"确认删除", MB_YESNO | MB_ICONQUESTION) != IDYES) break;
-            
-            SetStatus(L"正在删除...");
-            
-            // 删除 NVRAM 启动项
-            deleted = UefiDeleteBootEntry(id);
-            
-            if (!deleted) {
-                MessageBoxW(hWnd, L"删除失败\n\n请以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"删除失败");
-                break;
-            }
-            
-            // 检查是否需要删除 ESP 上的文件（\EFI\xxx\ 格式表示用户添加的）
-            if (efiPath[0] == L'\\' && wcsncmp(efiPath, L"\\EFI\\", 5) == 0) {
-                efiStart = efiPath + 5;
-                slash = wcschr(efiStart, L'\\');
-                if (slash) {
-                    len = (int)(slash - efiStart);
-                    // 排除系统目录（Microsoft, BOOT, refind 等）
-                    if (len > 0 && len < 64) {
-                        wcsncpy(dirName, efiStart, len);
-                        dirName[len] = L'\0';
-                        
-                        // 只删除非系统目录（用户自己添加的）
-                        if (_wcsicmp(dirName, L"Microsoft") != 0 && 
-                            _wcsicmp(dirName, L"BOOT") != 0 &&
-                            _wcsicmp(dirName, L"refind") != 0) {
-                            // 挂载 ESP 并删除目录
-                            if (MountESP(espDrive)) {
-                                swprintf(delDir, MAX_PATH, L"%s\\EFI\\%s", espDrive, dirName);
-                                swprintf(cmd, MAX_PATH, L"cmd /c rd /s /q \"%s\"", delDir);
-                                _wsystem(cmd);
-                                UnmountESP(espDrive[0]);
-                            }
-                        }
-                    }
-                }
-            }
-            
-            MessageBoxW(hWnd, L"启动项已删除", L"完成", MB_OK | MB_ICONINFORMATION);
-            SetStatus(L"已删除");
-            RefreshBootList();
             break;
         }
         
@@ -1163,89 +632,345 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         case ID_BTN_MOVE_DOWN: {
             if (!g_hListView || !g_bootList) break;
             int sel = ListView_GetNextItem(g_hListView, -1, LVNI_SELECTED);
-            if (sel == -1) {
-                MessageBoxW(hWnd, L"请先选择一个启动项", L"提示", MB_OK | MB_ICONINFORMATION);
-                break;
-            }
-
+            if (sel == -1) break;
+            
             WCHAR idText[16] = {0};
             ListView_GetItemText(g_hListView, sel, 0, idText, 16);
             DWORD id = wcstoul(idText, NULL, 16);
-
-            SetStatus((LOWORD(wParam) == ID_BTN_MOVE_UP) ? L"⏳ 正在上移..." : L"⏳ 正在下移...");
-            BOOL ok = (LOWORD(wParam) == ID_BTN_MOVE_UP)
-                ? UefiMoveBootEntryUp(g_bootList, id)
-                : UefiMoveBootEntryDown(g_bootList, id);
-
-            if (ok) {
-                SetStatus(L"✓ BootOrder 已更新");
-                RefreshBootList();
-            } else {
-                MessageBoxW(hWnd, L"调整顺序失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 调整失败");
-            }
+            
+            BOOL ok = (cmd == ID_BTN_MOVE_UP) ? UefiMoveBootEntryUp(g_bootList, id) : UefiMoveBootEntryDown(g_bootList, id);
+            if (ok) { RefreshBootList(); SetStatus(L"✓ 已调整"); }
             break;
         }
-
+        
         case ID_BTN_SET_DEFAULT: {
             if (!g_hListView) break;
             int sel = ListView_GetNextItem(g_hListView, -1, LVNI_SELECTED);
-            if (sel == -1) {
-                MessageBoxW(hWnd, L"请先选择一个启动项", L"提示", MB_OK | MB_ICONINFORMATION);
-                break;
-            }
+            if (sel == -1) { MessageBoxW(hWnd, L"请先选择", L"提示", MB_OK); break; }
             
             WCHAR idText[16] = {0};
             ListView_GetItemText(g_hListView, sel, 0, idText, 16);
             DWORD id = wcstoul(idText, NULL, 16);
             
-            WCHAR name[256] = {0};
-            ListView_GetItemText(g_hListView, sel, 1, name, 256);
+            if (UefiSetDefaultBootEntry(g_bootList, id)) MessageBoxW(hWnd, L"已设为默认", L"完成", MB_OK);
+            break;
+        }
+        
+        // rEFInd
+        case ID_BTN_INSTALL: {
+            // 让用户选择 ESP 分区
+            WCHAR espDrive = ShowEspSelectDialog(hWnd);
+            if (espDrive == 0) break;
             
-            SetStatus(L"⏳ 正在设置默认...");
-            if (UefiSetDefaultBootEntry(g_bootList, id)) {
-                WCHAR msg[256];
-                swprintf(msg, 256, L"已设置默认启动项:\n%s", name);
-                MessageBoxW(hWnd, msg, L"完成", MB_OK | MB_ICONINFORMATION);
-                SetStatus(L"✓ 已设为默认");
+            WCHAR esp[4] = {espDrive, L':', 0};
+            
+            WCHAR src[MAX_PATH];
+            if (!ResolveRefindSourcePath(src, MAX_PATH)) {
+                MessageBoxW(hWnd, L"未找到 refind 源文件", L"错误", MB_OK | MB_ICONERROR);
+                break;
+            }
+            
+            if (RefindInstall(src, esp)) {
+                MessageBoxW(hWnd, L"rEFInd 安装成功！", L"完成", MB_OK);
+                if (s_refindBtnInstall) EnableWindow(s_refindBtnInstall, FALSE);
+                if (s_refindBtnUninstall) EnableWindow(s_refindBtnUninstall, TRUE);
+                if (s_refindStatus) SetWindowTextW(s_refindStatus, L"rEFInd 已安装");
             } else {
-                MessageBoxW(hWnd, L"设置失败\n\n请确保以管理员身份运行", L"错误", MB_OK | MB_ICONERROR);
-                SetStatus(L"✗ 设置失败");
+                MessageBoxW(hWnd, L"安装失败", L"错误", MB_OK | MB_ICONERROR);
             }
             break;
         }
         
-        case ID_BTN_MBR_FIX: {
-            if (MessageBoxW(hWnd, L"确定修复 MBR？\n\n此操作将重写主引导记录。", L"确认", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-                SetStatus(L"⏳ 修复 MBR 中...");
-                // 使用 bootrec /fixmbr
-                SHELLEXECUTEINFOW sei = {0};
-                sei.cbSize = sizeof(sei);
-                sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-                sei.lpVerb = L"runas";
-                sei.lpFile = L"cmd.exe";
-                sei.lpParameters = L"/c bootrec /fixmbr";
-                sei.nShow = SW_HIDE;
+        case ID_BTN_UNINSTALL: {
+            if (MessageBoxW(hWnd, L"确定卸载 rEFInd？", L"确认", MB_YESNO) != IDYES) break;
+            
+            // 让用户选择 ESP 分区
+            WCHAR espDrive = ShowEspSelectDialog(hWnd);
+            if (espDrive == 0) break;
+            
+            WCHAR esp[4] = {espDrive, L':', 0};
+            
+            if (RefindUninstall(esp)) {
+                MessageBoxW(hWnd, L"已卸载", L"完成", MB_OK);
+                if (s_refindBtnInstall) EnableWindow(s_refindBtnInstall, TRUE);
+                if (s_refindBtnUninstall) EnableWindow(s_refindBtnUninstall, FALSE);
+                if (s_refindStatus) SetWindowTextW(s_refindStatus, L"rEFInd 未安装");
+            }
+            break;
+        }
+        
+        // Limine
+        case ID_BTN_INSTALL_LIMINE: {
+            WCHAR src[MAX_PATH];
+            if (!ResolveLimineSourcePath(src, MAX_PATH)) {
+                MessageBoxW(hWnd, 
+                    L"未找到 Limine 源文件\n\n"
+                    L"请在程序目录下创建 limine 文件夹：\n"
+                    L"  程序目录\\limine\\limine-bios.sys  (BIOS 模式)\n"
+                    L"  程序目录\\limine\\limine-efi\\BOOTX64.EFI  (UEFI 模式)\n\n"
+                    L"可从 https://github.com/limine-bootloader/limine/releases 下载",
+                    L"缺少文件", MB_OK | MB_ICONINFORMATION);
+                break;
+            }
+            
+            // 让用户选择 ESP 分区
+            WCHAR espDrive = ShowEspSelectDialog(hWnd);
+            if (espDrive == 0) break;
+            
+            WCHAR esp[4] = {espDrive, L':', 0};
+            
+            // 安装 Limine 到选中的 ESP（LimineInstallToUEFI 内部会注册 NVRAM）
+            if (LimineInstallToUEFI(esp, src)) {
+                MessageBoxW(hWnd, L"Limine 安装成功！", L"完成", MB_OK);
+                if (s_limineBtnInstall) EnableWindow(s_limineBtnInstall, FALSE);
+                if (s_limineBtnUninstall) EnableWindow(s_limineBtnUninstall, TRUE);
+                if (s_limineBtnAddEntry) EnableWindow(s_limineBtnAddEntry, TRUE);
+                if (s_limineBtnEditEntry) EnableWindow(s_limineBtnEditEntry, TRUE);
+                if (s_limineBtnDelEntry) EnableWindow(s_limineBtnDelEntry, TRUE);
+                if (s_limineStatus) SetWindowTextW(s_limineStatus, L"Limine 已安装");
                 
-                if (ShellExecuteExW(&sei)) {
-                    WaitForSingleObject(sei.hProcess, 30000);
-                    DWORD exitCode;
-                    GetExitCodeProcess(sei.hProcess, &exitCode);
-                    CloseHandle(sei.hProcess);
-                    
-                    if (exitCode == 0) {
-                        MessageBoxW(hWnd, L"MBR 修复完成", L"完成", MB_OK | MB_ICONINFORMATION);
-                        SetStatus(L"✓ MBR 已修复");
-                    } else {
-                        MessageBoxW(hWnd, L"MBR 修复失败", L"错误", MB_OK | MB_ICONERROR);
-                        SetStatus(L"✗ 修复失败");
-                    }
+                // 设置配置目录
+                swprintf(s_limineConfDir, MAX_PATH, L"%s\\EFI\\limine", esp);
+                RefreshLimineEntryList();
+            } else {
+                WCHAR msg[512];
+                swprintf(msg, 512, L"安装失败\n%s", LimineGetLastErrorMessage());
+                MessageBoxW(hWnd, msg, L"错误", MB_OK | MB_ICONERROR);
+            }
+            break;
+        }
+        
+        case ID_BTN_UNINSTALL_LIMINE: {
+            if (MessageBoxW(hWnd, L"确定卸载 Limine？", L"确认", MB_YESNO) != IDYES) break;
+            
+            // 让用户选择 ESP 分区
+            WCHAR espDrive = ShowEspSelectDialog(hWnd);
+            if (espDrive == 0) break;
+            
+            WCHAR esp[4] = {espDrive, L':', 0};
+            
+            LimineUninstall(esp);
+            
+            MessageBoxW(hWnd, L"已卸载", L"完成", MB_OK);
+            if (s_limineBtnInstall) EnableWindow(s_limineBtnInstall, TRUE);
+            if (s_limineBtnUninstall) EnableWindow(s_limineBtnUninstall, FALSE);
+            if (s_limineBtnAddEntry) EnableWindow(s_limineBtnAddEntry, FALSE);
+            if (s_limineBtnEditEntry) EnableWindow(s_limineBtnEditEntry, FALSE);
+            if (s_limineBtnDelEntry) EnableWindow(s_limineBtnDelEntry, FALSE);
+            if (s_limineStatus) SetWindowTextW(s_limineStatus, L"Limine 未安装");
+            if (s_limineList) ListView_DeleteAllItems(s_limineList);
+            s_limineEntryCount = 0;
+            s_limineConfDir[0] = L'\0';
+            break;
+        }
+        
+        // Limine 启动项管理
+        case ID_BTN_LIMINE_ADD: {  // 添加
+            if (s_limineEntryCount >= 64) break;
+            LIMINE_CONF_ENTRY* e = &s_limineEntries[s_limineEntryCount];
+            memset(e, 0, sizeof(LIMINE_CONF_ENTRY));
+            
+            if (ShowLimineEditDialog(hWnd, e, TRUE)) {
+                s_limineEntryCount++;
+                SaveLimineConfEntries();
+                RefreshLimineEntryList();
+                // 选中新条目
+                ListView_SetItemState(s_limineList, s_limineEntryCount - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+            }
+            break;
+        }
+        
+        case ID_BTN_LIMINE_EDIT: {  // 编辑
+            int sel = ListView_GetNextItem(s_limineList, -1, LVNI_SELECTED);
+            if (sel < 0 || sel >= s_limineEntryCount) {
+                MessageBoxW(hWnd, L"请先选择一个启动项", L"提示", MB_OK);
+                break;
+            }
+            
+            if (ShowLimineEditDialog(hWnd, &s_limineEntries[sel], FALSE)) {
+                SaveLimineConfEntries();
+                RefreshLimineEntryList();
+            }
+            break;
+        }
+        
+        case ID_BTN_LIMINE_DELETE: {  // 删除
+            int sel = ListView_GetNextItem(s_limineList, -1, LVNI_SELECTED);
+            if (sel < 0 || sel >= s_limineEntryCount) {
+                MessageBoxW(hWnd, L"请先选择一个启动项", L"提示", MB_OK);
+                break;
+            }
+            WCHAR msg[256];
+            swprintf(msg, 256, L"确定删除 \"%s\" 吗？", s_limineEntries[sel].name);
+            if (MessageBoxW(hWnd, msg, L"确认", MB_YESNO) == IDYES) {
+                for (int i = sel; i < s_limineEntryCount - 1; i++) {
+                    s_limineEntries[i] = s_limineEntries[i + 1];
+                }
+                s_limineEntryCount--;
+                SaveLimineConfEntries();
+                RefreshLimineEntryList();
+            }
+            break;
+        }
+        
+        case ID_BTN_LIMINE_REFRESH:  // 刷新
+            RefreshLimineEntryList();
+            break;
+        
+        // 备份恢复
+        case ID_BTN_BACKUP_MBR: {
+            WCHAR dir[MAX_PATH] = {0}, file[MAX_PATH];
+            BackupGetBackupDir(dir, MAX_PATH);
+            SYSTEMTIME st; GetLocalTime(&st);
+            swprintf(file, MAX_PATH, L"%s\\MBR_%04d%02d%02d.bin", dir, st.wYear, st.wMonth, st.wDay);
+            if (BackupMBR(L"PhysicalDrive0", file)) {
+                MessageBoxW(hWnd, L"备份成功", L"完成", MB_OK);
+            } else {
+                MessageBoxW(hWnd, L"备份失败", L"错误", MB_OK | MB_ICONERROR);
+            }
+            break;
+        }
+        
+        case ID_BTN_RESTORE: {
+            OPENFILENAMEW ofn = {0};
+            WCHAR file[MAX_PATH] = {0}, dir[MAX_PATH];
+            BackupGetBackupDir(dir, MAX_PATH);
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hWnd;
+            ofn.lpstrFile = file;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.lpstrFilter = L"MBR 备份 (*.bin)\0*.bin\0";
+            ofn.lpstrInitialDir = dir;
+            ofn.Flags = OFN_FILEMUSTEXIST;
+            
+            if (!GetOpenFileNameW(&ofn)) break;
+            
+            // 询问是否保留分区表
+            int result = MessageBoxW(hWnd, 
+                L"是否保留当前分区表？\n\n"
+                L"选择「是」：仅恢复引导代码，保留分区表（推荐）\n"
+                L"选择「否」：完整恢复（包含分区表，危险操作）\n"
+                L"选择「取消」：放弃操作",
+                L"恢复选项", MB_YESNOCANCEL | MB_ICONQUESTION);
+            
+            if (result == IDCANCEL) break;
+            
+            BOOL preservePartTable = (result == IDYES);
+            if (RestoreMBR(L"PhysicalDrive0", file)) {
+                MessageBoxW(hWnd, L"恢复成功", L"完成", MB_OK);
+            } else {
+                MessageBoxW(hWnd, L"恢复失败", L"错误", MB_OK | MB_ICONERROR);
+            }
+            break;
+        }
+        
+        case ID_BTN_MBR_REPAIR: {
+            if (MessageBoxW(hWnd, L"确定修复 MBR？", L"确认", MB_YESNO) != IDYES) break;
+            SHELLEXECUTEINFOW sei = {0};
+            sei.cbSize = sizeof(sei);
+            sei.lpVerb = L"runas";
+            sei.lpFile = L"cmd.exe";
+            sei.lpParameters = L"/c bootrec /fixmbr";
+            sei.nShow = SW_HIDE;
+            if (ShellExecuteExW(&sei)) {
+                WaitForSingleObject(sei.hProcess, 30000);
+                DWORD code;
+                GetExitCodeProcess(sei.hProcess, &code);
+                CloseHandle(sei.hProcess);
+                MessageBoxW(hWnd, code == 0 ? L"修复完成" : L"修复失败", code == 0 ? L"完成" : L"错误", MB_OK);
+            }
+            break;
+        }
+        
+        // 备份恢复页面的新增按钮
+        case ID_BTN_RESTORE_MBR: {
+            OPENFILENAMEW ofn = {0};
+            WCHAR file[MAX_PATH] = {0}, dir[MAX_PATH];
+            BackupGetBackupDir(dir, MAX_PATH);
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hWnd;
+            ofn.lpstrFile = file;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.lpstrFilter = L"MBR 备份 (*.bin)\0*.bin\0";
+            ofn.lpstrInitialDir = dir;
+            ofn.Flags = OFN_FILEMUSTEXIST;
+            
+            if (!GetOpenFileNameW(&ofn)) break;
+            
+            // 询问是否保留分区表
+            int result = MessageBoxW(hWnd, 
+                L"是否保留当前分区表？\n\n"
+                L"选择「是」：仅恢复引导代码，保留分区表（推荐）\n"
+                L"选择「否」：完整恢复（包含分区表，危险操作）\n"
+                L"选择「取消」：放弃操作",
+                L"恢复选项", MB_YESNOCANCEL | MB_ICONQUESTION);
+            
+            if (result == IDCANCEL) break;
+            
+            BOOL preservePartTable = (result == IDYES);
+            WCHAR error[256] = {0};
+            
+            // 默认恢复到磁盘 0
+            if (MBR_Restore(0, file, preservePartTable, error, 256)) {
+                MessageBoxW(hWnd, L"MBR 恢复成功", L"完成", MB_OK);
+            } else {
+                MessageBoxW(hWnd, error[0] ? error : L"恢复失败", L"错误", MB_OK | MB_ICONERROR);
+            }
+            break;
+        }
+        
+        case ID_BTN_UEFI_REPAIR: {
+            if (!BootMode_IsUEFIFirmware()) {
+                MessageBoxW(hWnd, L"当前不是 UEFI 模式，无法修复 UEFI 引导", L"错误", MB_OK | MB_ICONERROR);
+                break;
+            }
+            
+            if (MessageBoxW(hWnd, 
+                L"确定修复 UEFI 引导？\n\n"
+                L"此操作将：\n"
+                L"• 检查并修复 ESP 分区\n"
+                L"• 重新创建 Windows Boot Manager 启动项\n"
+                L"• 修复 UEFI NVRAM 启动顺序",
+                L"确认", MB_YESNO | MB_ICONQUESTION) != IDYES) break;
+            
+            // 使用 bcdboot 修复
+            SHELLEXECUTEINFOW sei = {0};
+            sei.cbSize = sizeof(sei);
+            sei.lpVerb = L"runas";
+            sei.lpFile = L"cmd.exe";
+            sei.lpParameters = L"/c bcdboot C:\\Windows /l zh-cn /s S: /f UEFI";
+            sei.nShow = SW_HIDE;
+            
+            if (ShellExecuteExW(&sei)) {
+                WaitForSingleObject(sei.hProcess, 30000);
+                DWORD code;
+                GetExitCodeProcess(sei.hProcess, &code);
+                CloseHandle(sei.hProcess);
+                
+                if (code == 0) {
+                    MessageBoxW(hWnd, L"UEFI 引导修复成功\n\n如果启动项仍未显示，请重启后检查 BIOS 设置", L"完成", MB_OK);
+                } else {
+                    MessageBoxW(hWnd, L"UEFI 引导修复失败\n\n可能需要手动检查 ESP 分区", L"错误", MB_OK | MB_ICONERROR);
                 }
             }
             break;
         }
+    }
+    return 0;
+}
+        
+    case WM_NOTIFY: {
+        LPNMHDR pnmhdr = (LPNMHDR)lParam;
+        
+        // Tab 切换
+        if (pnmhdr->code == TCN_SELCHANGE) {
+            if (pnmhdr->idFrom == ID_TAB_THIRD_PARTY) {
+                g_currentThirdPartyTab = TabCtrl_GetCurSel(pnmhdr->hwndFrom);
+                SwitchPage(1);
+            }
         }
         return 0;
+    }
         
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -1254,363 +979,1013 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-// ============================================
-// 创建导航栏
-// ============================================
 static void CreateNavigation(HWND hWnd)
 {
-    // 侧边栏
-    CreateWindowExW(0, L"STATIC", NULL, WS_CHILD | WS_VISIBLE,
-        0, 0, SIDEBAR_WIDTH, WINDOW_HEIGHT, hWnd, NULL, NULL, NULL);
+    CreateWindowExW(0, L"STATIC", NULL, WS_CHILD | WS_VISIBLE, 0, 0, SIDEBAR_WIDTH, WINDOW_HEIGHT, hWnd, NULL, NULL, NULL);
     
-    // Logo / 标题
-    HWND hLogo = CreateWindowExW(0, L"STATIC", L"⚙ Boot Manager",
-        WS_CHILD | WS_VISIBLE | SS_LEFT, 24, 24, SIDEBAR_WIDTH - 48, 32,
-        hWnd, NULL, NULL, NULL);
+    HWND hLogo = CreateWindowExW(0, L"STATIC", L"⚙ Boot Manager", WS_CHILD | WS_VISIBLE, 24, 24, SIDEBAR_WIDTH - 48, 32, hWnd, NULL, NULL, NULL);
     SendMessageW(hLogo, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
     
-    // 副标题
-    HWND hSub = CreateWindowExW(0, L"STATIC", L"Professional UEFI Tool",
-        WS_CHILD | WS_VISIBLE | SS_LEFT, 24, 56, SIDEBAR_WIDTH - 48, 20,
-        hWnd, NULL, NULL, NULL);
-    SendMessageW(hSub, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
-    
-    // 导航项
     struct { int id; const WCHAR* text; } items[] = {
-        { ID_NAV_UEFI, L"UEFI 管理" },
-        { ID_NAV_MBR, L"MBR 管理" },
-        { ID_NAV_REFIND, L"rEFInd 管理" },
-        { ID_NAV_BCD, L"BCD 菜单" },
-        { ID_NAV_BACKUP, L"高级功能" },
+        { ID_NAV_BOOT_MGR, L"引导管理" },
+        { ID_NAV_THIRD_PARTY, L"第三方引导管理器" },
+        { ID_NAV_BACKUP_RESTORE, L"备份恢复" },
         { ID_NAV_ABOUT, L"关于" }
     };
     
-    BOOL isUEFI = BootMode_IsUEFIFirmware();
-    
     int y = 100;
-    for (int i = 0; i < 6; i++) {
-        g_navItems[i] = CreateWindowExW(0, L"BUTTON", items[i].text,
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-            16, y, SIDEBAR_WIDTH - 32, NAV_ITEM_HEIGHT,
-            hWnd, (HMENU)(UINT_PTR)items[i].id, NULL, NULL);
+    for (int i = 0; i < 4; i++) {
+        g_navItems[i] = CreateWindowExW(0, L"BUTTON", items[i].text, WS_CHILD | WS_VISIBLE, 16, y, SIDEBAR_WIDTH - 32, NAV_ITEM_HEIGHT, hWnd, (HMENU)(UINT_PTR)items[i].id, NULL, NULL);
         SendMessageW(g_navItems[i], WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-        // MBR 管理在 UEFI 模式下灰色
-        if (items[i].id == ID_NAV_MBR && isUEFI) {
-            EnableWindow(g_navItems[i], FALSE);
-        }
         y += NAV_ITEM_HEIGHT + 8;
     }
 }
 
-// ============================================
-// 创建内容区域
-// ============================================
-// 内容面板子类化窗口过程 - 转发 WM_COMMAND 到主窗口
-static LRESULT CALLBACK ContentWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-    if (msg == WM_COMMAND) {
-        // 转发到主窗口
-        SendMessageW(g_hMainWnd, WM_COMMAND, wParam, lParam);
-        return 0;
-    }
-    return DefWindowProcW(hWnd, msg, wParam, lParam);
-}
-
-static WNDPROC g_oldContentProc = NULL;
-
 static void CreateContentArea(HWND hWnd)
 {
-    g_hContent = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", NULL,
-        WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
-        SIDEBAR_WIDTH, 0, WINDOW_WIDTH - SIDEBAR_WIDTH, WINDOW_HEIGHT,
-        hWnd, (HMENU)999, NULL, NULL);
-    
-    // 子类化内容面板，转发 WM_COMMAND 到主窗口
-    g_oldContentProc = (WNDPROC)SetWindowLongPtrW(g_hContent, GWLP_WNDPROC, (LONG_PTR)ContentWndProc);
+    // 使用自定义窗口类，能转发 WM_COMMAND 和 WM_NOTIFY 消息
+    g_hContent = CreateWindowExW(0, L"BootManagerContentClass", NULL, 
+        WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 
+        SIDEBAR_WIDTH, 0, WINDOW_WIDTH - SIDEBAR_WIDTH, WINDOW_HEIGHT, 
+        hWnd, NULL, NULL, NULL);
 }
 
-// ============================================
-// 切换页面
-// ============================================
+// 销毁子窗口的回调
+static BOOL CALLBACK DestroyChildWindow(HWND hWnd, LPARAM lParam)
+{
+    DestroyWindow(hWnd);
+    return TRUE;
+}
+
 static void SwitchPage(int page)
 {
     g_currentPage = page;
     g_hListView = NULL;
     g_hStatusText = NULL;
+    s_refindBtnInstall = s_refindBtnUninstall = s_refindStatus = NULL;
+    s_limineBtnInstall = s_limineBtnUninstall = s_limineStatus = NULL;
     
-    if (g_hContent) { DestroyWindow(g_hContent); g_hContent = NULL; }
-    CreateContentArea(g_hMainWnd);
+    // 多次枚举确保所有子窗口被销毁
+    if (g_hContent) {
+        for (int i = 0; i < 3; i++) {
+            EnumChildWindows(g_hContent, DestroyChildWindow, 0);
+        }
+    }
     
     switch (page) {
-        case 0: BuildUEFIPage(g_hContent); break;
-        case 1: BuildMBRPage(g_hContent); break;
-        case 2: BuildRefindPage(g_hContent); break;
-        case 3: BcdPageBuild(g_hContent, g_fontTitle, g_fontBody, g_fontSmall); break;
-        case 4: BuildAdvancedPage(g_hContent); break;
-        case 5: BuildAboutPage(g_hContent); break;
+        case 0: BuildBootMgrPage(g_hContent); break;
+        case 1: BuildThirdPartyPage(g_hContent); break;
+        case 2: BuildBackupRestorePage(g_hContent); break;
+        case 3: BuildAboutPage(g_hContent); break;
     }
 }
 
-// ============================================
-// UEFI 页面
-// ============================================
-static void BuildUEFIPage(HWND hParent)
+// 引导管理页面 (仅 UEFI 管理)
+static void BuildBootMgrPage(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right - CONTENT_PADDING * 2;
-    int h = rc.bottom;
-
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"UEFI 管理",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING, w, 32,
-        hParent, NULL, NULL, NULL);
+    
+    // 检查是否为 UEFI 模式
+    BOOL isUEFI = BootMode_IsUEFIFirmware();
+    
+    int y = 10;
+    
+    // 标题
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"UEFI 启动项管理", WS_CHILD | WS_VISIBLE, 10, y, rc.right - 20, 28, hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-
+    y += 35;
+    
+    if (!isUEFI) {
+        // 非 UEFI 模式提示
+        HWND hInfo = CreateWindowExW(0, L"STATIC",
+            L"⚠ 当前系统未运行在 UEFI 模式下\n\n"
+            L"UEFI 启动项管理功能仅在 UEFI 固件模式下可用。\n"
+            L"请在 BIOS 设置中启用 UEFI 启动模式。",
+            WS_CHILD | WS_VISIBLE, 10, y, rc.right - 20, 100, hParent, NULL, NULL, NULL);
+        SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+        return;
+    }
+    
+    // UEFI 启动项列表
     g_hListView = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEW, NULL,
-        WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL,
-        CONTENT_PADDING, CONTENT_PADDING + 50, w, h - 200,
-        hParent, (HMENU)ID_LIST_BOOT, NULL, NULL);
+        WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL, 10, y, rc.right - 20, rc.bottom - y - 60, hParent, (HMENU)ID_LIST_BOOT, NULL, NULL);
     ListView_SetExtendedListViewStyle(g_hListView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-
+    
     LVCOLUMN lvc = {0}; lvc.mask = LVCF_TEXT | LVCF_WIDTH;
-    lvc.pszText = L"ID"; lvc.cx = 80; ListView_InsertColumn(g_hListView, 0, &lvc);
-    lvc.pszText = L"名称"; lvc.cx = 240; ListView_InsertColumn(g_hListView, 1, &lvc);
-    lvc.pszText = L"路径"; lvc.cx = w - 340; ListView_InsertColumn(g_hListView, 2, &lvc);
-
+    lvc.pszText = L"ID"; lvc.cx = 70; ListView_InsertColumn(g_hListView, 0, &lvc);
+    lvc.pszText = L"名称"; lvc.cx = 200; ListView_InsertColumn(g_hListView, 1, &lvc);
+    lvc.pszText = L"路径"; lvc.cx = rc.right - 290; ListView_InsertColumn(g_hListView, 2, &lvc);
+    
     RefreshBootList();
-
-    int bx = CONTENT_PADDING, by = h - 130;
-    #define BTN(id, text, wd) CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE, bx, by, wd, BTN_HEIGHT, hParent, (HMENU)id, NULL, NULL); SendMessageW(GetDlgItem(hParent, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); bx += wd + 10;
-
-    BTN(ID_BTN_REFRESH, L"🔄 刷新", 90);
-    BTN(ID_BTN_ADD_ENTRY, L"➕ 添加 EFI", 100);
-    BTN(ID_BTN_DELETE_ENTRY, L"🗑 删除", 90);
-    BTN(ID_BTN_MOVE_UP, L"↑ 上移", 70);
-    BTN(ID_BTN_MOVE_DOWN, L"↓ 下移", 70);
-    BTN(ID_BTN_SET_DEFAULT, L"⭐ 设为默认", 110);
-
-    #undef BTN
-
-    g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 30, w, 24, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
+    
+    int bx = 10, by = rc.bottom - 50;
+    #define B(id, t, w) CreateWindowExW(0, L"BUTTON", t, WS_CHILD | WS_VISIBLE, bx, by, w, BTN_HEIGHT, hParent, (HMENU)id, NULL, NULL); SendMessageW(GetDlgItem(hParent, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); bx += w + 8;
+    B(ID_BTN_REFRESH, L"刷新", 70);
+    B(ID_BTN_ADD_ENTRY, L"添加", 70);
+    B(ID_BTN_DELETE_ENTRY, L"删除", 70);
+    B(ID_BTN_MOVE_UP, L"↑", 50);
+    B(ID_BTN_MOVE_DOWN, L"↓", 50);
+    B(ID_BTN_SET_DEFAULT, L"默认", 70);
+    #undef B
+    
+    g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪", WS_CHILD | WS_VISIBLE, 10, rc.bottom - 20, rc.right - 20, 20, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
     SendMessageW(g_hStatusText, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
-// ============================================
-// MBR 管理页面
-// ============================================
-static void BuildMBRPage(HWND hParent)
+// 第三方引导管理器页面
+static void BuildThirdPartyPage(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right - CONTENT_PADDING * 2;
-    int h = rc.bottom;
+    BOOL isUEFI = BootMode_IsUEFIFirmware();
+    
+    // MBR 模式下显示提示
+    if (!isUEFI) {
+        int y = 50;
+        
+        HWND hTitle = CreateWindowExW(0, L"STATIC", L"第三方引导管理器", WS_CHILD | WS_VISIBLE, 10, y, rc.right - 20, 28, hParent, NULL, NULL, NULL);
+        SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
+        y += 50;
+        
+        HWND hInfo = CreateWindowExW(0, L"STATIC",
+            L"⚠ 当前为 Legacy BIOS (MBR) 模式\n\n"
+            L"rEFInd 仅支持 UEFI 模式。\n"
+            L"Limine MBR 版本请在「引导管理 → MBR 管理」页面安装。",
+            WS_CHILD | WS_VISIBLE, 10, y, rc.right - 20, 100, hParent, NULL, NULL, NULL);
+        SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+        return;
+    }
+    
+    // UEFI 模式：显示 rEFInd 和 Limine (UEFI版)
+    HWND hTab = CreateWindowExW(0, WC_TABCONTROL, NULL, WS_CHILD | WS_VISIBLE, 10, 10, rc.right - 20, TAB_HEIGHT, hParent, (HMENU)ID_TAB_THIRD_PARTY, NULL, NULL);
+    SendMessageW(hTab, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    
+    TCITEMW tci = {0}; tci.mask = TCIF_TEXT;
+    tci.pszText = L"rEFInd"; TabCtrl_InsertItem(hTab, 0, &tci);
+    tci.pszText = L"Limine (UEFI)"; TabCtrl_InsertItem(hTab, 1, &tci);
+    
+    TabCtrl_SetCurSel(hTab, g_currentThirdPartyTab);
+    
+    if (g_currentThirdPartyTab == 0) {
+        BuildRefindControls(hParent);
+        RefindRefreshStatus();
+    } else {
+        BuildLimineControls(hParent);
+        LimineRefreshStatus();
+    }
+}
 
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"MBR 管理",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING, w, 32,
-        hParent, NULL, NULL, NULL);
+// rEFInd 控件
+static void BuildRefindControls(HWND hParent)
+{
+    RECT rc; GetClientRect(hParent, &rc);
+    int w = rc.right - 20, y = 50;
+    
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"rEFInd 引导管理器", WS_CHILD | WS_VISIBLE, 10, y, w, 28, hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-
-    // 提示信息
-    HWND hInfo = CreateWindowExW(0, L"STATIC",
-        L"当前系统识别为 UEFI 启动模式，MBR 管理功能不可用。\n\n"
-        L"MBR 管理适用于传统 BIOS/Legacy 启动模式的系统。\n\n"
-        L"如果您需要使用 MBR 功能，请在 BIOS 设置中切换启动模式，\n"
-        L"或使用支持传统启动的 PE 环境运行本程序。",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING + 50, w, 120,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-
-    // 图标
-    HWND hIcon = CreateWindowExW(0, L"STATIC", L"ℹ",
-        WS_CHILD | WS_VISIBLE | SS_CENTER, CONTENT_PADDING + 20, CONTENT_PADDING + 180, 40, 40,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hIcon, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-
-    HWND hNote = CreateWindowExW(0, L"STATIC",
-        L"提示：UEFI 启动模式下，请使用「UEFI 管理」或「rEFInd 管理」",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING + 70, CONTENT_PADDING + 190, w - 100, 24,
-        hParent, NULL, NULL, NULL);
+    y += 40;
+    
+    HWND hDesc = CreateWindowExW(0, L"STATIC", L"rEFInd 是现代化的 UEFI 引导管理器，安装后会自动检测并列出所有操作系统。", WS_CHILD | WS_VISIBLE, 10, y, w, 24, hParent, NULL, NULL, NULL);
+    SendMessageW(hDesc, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    y += 35;
+    
+    HWND hInfo = CreateWindowExW(0, L"STATIC", L"安装位置: ESP 分区 \\EFI\\refind\\", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+    SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    y += 30;
+    
+    HWND hRes = CreateWindowExW(0, L"STATIC", L"资源文件: 程序目录下的 refind\\ 文件夹", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+    SendMessageW(hRes, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    y += 45;
+    
+    s_refindBtnInstall = CreateWindowExW(0, L"BUTTON", L"安装 rEFInd", WS_CHILD | WS_VISIBLE, 10, y, 130, BTN_HEIGHT, hParent, (HMENU)ID_BTN_INSTALL, NULL, NULL);
+    SendMessageW(s_refindBtnInstall, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    
+    s_refindBtnUninstall = CreateWindowExW(0, L"BUTTON", L"卸载 rEFInd", WS_CHILD | WS_VISIBLE, 150, y, 130, BTN_HEIGHT, hParent, (HMENU)ID_BTN_UNINSTALL, NULL, NULL);
+    SendMessageW(s_refindBtnUninstall, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    y += 60;
+    
+    HWND hNote = CreateWindowExW(0, L"STATIC", L"说明：\n• rEFInd 安装后会自动扫描系统\n• 支持检测 Windows、Linux、macOS\n• 需要 refind_x64.efi 文件", WS_CHILD | WS_VISIBLE, 10, y, w, 80, hParent, NULL, NULL, NULL);
     SendMessageW(hNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    
+    s_refindStatus = CreateWindowExW(0, L"STATIC", L"检测中...", WS_CHILD | WS_VISIBLE, 10, rc.bottom - 20, w, 20, hParent, NULL, NULL, NULL);
+    SendMessageW(s_refindStatus, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
-// ============================================
-// rEFInd 页面 - 委托给 refind_page 模块
-// ============================================
-static void BuildRefindPage(HWND hParent)
+static void RefindRefreshStatus(void)
 {
-    RefindPageBuild(hParent, g_fontTitle, g_fontBody, g_fontSmall);
+    WCHAR esp[4] = {0};
+    BOOL installed = FALSE;
+    if (MountESP(esp)) {
+        installed = RefindIsInstalled(esp);
+        UnmountESP(esp[0]);
+    }
+    
+    if (s_refindBtnInstall) EnableWindow(s_refindBtnInstall, !installed);
+    if (s_refindBtnUninstall) EnableWindow(s_refindBtnUninstall, installed);
+    if (s_refindStatus) SetWindowTextW(s_refindStatus, installed ? L"rEFInd 已安装" : L"rEFInd 未安装");
 }
 
-static void RefreshRefindMenuList(void)
+// 解析 limine.conf
+static BOOL LoadLimineConfEntries(void)
 {
-    RefindPageRefresh();
+    s_limineEntryCount = 0;
+    if (s_limineConfDir[0] == L'\0') {
+        return FALSE;
+    }
+    
+    WCHAR confPath[MAX_PATH];
+    swprintf(confPath, MAX_PATH, L"%s\\limine.conf", s_limineConfDir);
+    
+    HANDLE hFile = CreateFileW(confPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        return FALSE;
+    }
+    
+    DWORD fileSize = GetFileSize(hFile, NULL);
+    if (fileSize == 0 || fileSize > 64 * 1024) {
+        CloseHandle(hFile);
+        return FALSE;
+    }
+    
+    char* buffer = (char*)malloc(fileSize + 1);
+    if (!buffer) {
+        CloseHandle(hFile);
+        return FALSE;
+    }
+    DWORD bytesRead = 0;
+    ReadFile(hFile, buffer, fileSize, &bytesRead, NULL);
+    buffer[bytesRead] = '\0';
+    CloseHandle(hFile);
+    
+    // 计算宽字符缓冲区大小
+    int wideSize = MultiByteToWideChar(CP_UTF8, 0, buffer, -1, NULL, 0);
+    if (wideSize <= 0) {
+        free(buffer);
+        return FALSE;
+    }
+    
+    WCHAR* wbuffer = (WCHAR*)malloc(wideSize * sizeof(WCHAR));
+    if (!wbuffer) {
+        free(buffer);
+        return FALSE;
+    }
+    MultiByteToWideChar(CP_UTF8, 0, buffer, -1, wbuffer, wideSize);
+    free(buffer);
+    
+    // 解析行
+    WCHAR* line = wbuffer;
+    WCHAR* lineEnd = NULL;
+    LIMINE_CONF_ENTRY* current = NULL;
+    
+    while (*line && s_limineEntryCount < 64) {
+        // 找到行尾
+        lineEnd = line;
+        while (*lineEnd && *lineEnd != L'\r' && *lineEnd != L'\n') {
+            lineEnd++;
+        }
+        
+        // 截断行
+        WCHAR saved = *lineEnd;
+        *lineEnd = L'\0';
+        
+        // 跳过空行和注释
+        if (line[0] != L'\0' && line[0] != L'#') {
+            if (line[0] == L'/') {
+                // 新条目
+                current = &s_limineEntries[s_limineEntryCount];
+                memset(current, 0, sizeof(LIMINE_CONF_ENTRY));
+                wcsncpy(current->name, line + 1, 127);
+                wcscpy(current->protocol, L"limine");
+                s_limineEntryCount++;
+            } else if (current) {
+                // 解析键值对
+                WCHAR* colon = wcschr(line, L':');
+                if (colon) {
+                    *colon = L'\0';
+                    WCHAR* key = line;
+                    while (*key == L' ' || *key == L'\t') key++;
+                    WCHAR* value = colon + 1;
+                    while (*value == L' ' || *value == L'\t') value++;
+                    
+                    if (_wcsicmp(key, L"protocol") == 0) {
+                        wcsncpy(current->protocol, value, 31);
+                    } else if (_wcsicmp(key, L"path") == 0) {
+                        wcsncpy(current->path, value, MAX_PATH - 1);
+                    } else if (_wcsicmp(key, L"kernel_cmdline") == 0) {
+                        wcsncpy(current->cmdline, value, 511);
+                    }
+                }
+            }
+        }
+        
+        // 恢复并移到下一行
+        *lineEnd = saved;
+        line = lineEnd;
+        while (*line == L'\r' || *line == L'\n') {
+            line++;
+        }
+    }
+    
+    free(wbuffer);
+    return s_limineEntryCount > 0;
 }
-// ============================================
-// ============================================
-// 高级功能页面
-// ============================================
-static void BuildAdvancedPage(HWND hParent)
+
+// 保存 limine.conf
+static BOOL SaveLimineConfEntries(void)
+{
+    if (s_limineConfDir[0] == L'\0') return FALSE;
+    
+    WCHAR confPath[MAX_PATH];
+    swprintf(confPath, MAX_PATH, L"%s\\limine.conf", s_limineConfDir);
+    
+    HANDLE hFile = CreateFileW(confPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return FALSE;
+    
+    WCHAR wbuffer[32 * 1024] = {0};
+    wcscat(wbuffer, L"# Limine Configuration\n# Generated by Boot Manager Pro\n\ntimeout: 5\n\n");
+    
+    for (int i = 0; i < s_limineEntryCount; i++) {
+        LIMINE_CONF_ENTRY* e = &s_limineEntries[i];
+        WCHAR entry[1024];
+        swprintf(entry, 1024, L"/%s\n    protocol: %s\n    path: %s\n\n", e->name, e->protocol, e->path);
+        wcscat(wbuffer, entry);
+    }
+    
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wbuffer, -1, NULL, 0, NULL, NULL);
+    char* utf8 = (char*)malloc(utf8Len);
+    WideCharToMultiByte(CP_UTF8, 0, wbuffer, -1, utf8, utf8Len, NULL, NULL);
+    
+    DWORD written;
+    WriteFile(hFile, utf8, utf8Len - 1, &written, NULL);
+    free(utf8);
+    CloseHandle(hFile);
+    return TRUE;
+}
+
+// 刷新 Limine 启动项列表
+static void RefreshLimineEntryList(void)
+{
+    if (!s_limineList) return;
+    ListView_DeleteAllItems(s_limineList);
+    
+    // 检查配置目录
+    if (s_limineConfDir[0] == L'\0') {
+        if (s_limineStatus) SetWindowTextW(s_limineStatus, L"未找到配置目录");
+        return;
+    }
+    
+    // 加载配置
+    LoadLimineConfEntries();
+    
+    // 添加到列表
+    for (int i = 0; i < s_limineEntryCount; i++) {
+        LVITEMW lvi = {0};
+        lvi.mask = LVIF_TEXT;
+        WCHAR num[8]; 
+        swprintf(num, 8, L"%d", i + 1);
+        lvi.pszText = num;
+        lvi.iItem = i;
+        ListView_InsertItem(s_limineList, &lvi);
+        ListView_SetItemText(s_limineList, i, 1, s_limineEntries[i].name);
+        ListView_SetItemText(s_limineList, i, 2, s_limineEntries[i].protocol);
+        ListView_SetItemText(s_limineList, i, 3, s_limineEntries[i].path);
+    }
+    
+    // 更新状态
+    if (s_limineStatus) {
+        WCHAR status[512];
+        if (s_limineEntryCount > 0) {
+            swprintf(status, 512, L"共 %d 个启动项 [%s]", s_limineEntryCount, s_limineConfDir);
+        } else {
+            swprintf(status, 512, L"配置文件为空或无效 [%s\\limine.conf]", s_limineConfDir);
+        }
+        SetWindowTextW(s_limineStatus, status);
+    }
+}
+
+// 根据扩展名自动选择协议
+// Limine 协议说明：
+// - limine: 原生协议，支持 ISO 镜像的 CD-ROM 模拟引导
+// - efi: UEFI 链式加载，用于加载 EFI 引导程序（如 Windows、GRUB）
+// - bios_chain: BIOS 链式加载
+// - linux: Linux 内核直接启动
+static const WCHAR* DetectProtocolByExtension(const WCHAR* path)
+{
+    if (!path || !path[0]) return L"limine";
+    
+    const WCHAR* ext = wcsrchr(path, L'.');
+    if (!ext) return L"limine";
+    
+    if (_wcsicmp(ext, L".iso") == 0 || _wcsicmp(ext, L".img") == 0) {
+        return L"limine";  // ISO/IMG 镜像 - 使用 CD-ROM 模拟
+    }
+    if (_wcsicmp(ext, L".efi") == 0) {
+        return L"efi";  // EFI 文件 - UEFI 链式加载
+    }
+    if (_wcsicmp(ext, L".bin") == 0) {
+        return L"bios_chain";  // BIOS 引导
+    }
+    if (_wcsicmp(ext, L".elf") == 0) {
+        return L"linux";  // Linux 内核
+    }
+    
+    return L"limine";  // 默认
+}
+
+// 编辑对话框数据
+static LIMINE_CONF_ENTRY* g_editEntry = NULL;
+static BOOL g_editIsAdd = FALSE;
+static HWND g_editHwnd = NULL;
+
+static LRESULT CALLBACK LimineEditDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+        case WM_CREATE: {
+            RECT rc;
+            GetClientRect(hDlg, &rc);
+            int w = rc.right, y = 15;
+            HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            
+            // 名称
+            CreateWindowExW(0, L"STATIC", L"启动项名称：", WS_CHILD | WS_VISIBLE, 15, y, 80, 20, hDlg, NULL, NULL, NULL);
+            CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", g_editEntry->name, WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 100, y, w - 180, 24, hDlg, (HMENU)3300, NULL, NULL);
+            y += 35;
+            
+            // 协议
+            CreateWindowExW(0, L"STATIC", L"启动协议：", WS_CHILD | WS_VISIBLE, 15, y, 80, 20, hDlg, NULL, NULL, NULL);
+            HWND hCombo = CreateWindowExW(0, L"COMBOBOX", NULL, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST, 100, y, w - 180, 150, hDlg, (HMENU)3302, NULL, NULL);
+            SendMessageW(hCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
+            // Limine 协议说明
+            // limine: ISO/IMG 镜像的 CD-ROM 模拟引导
+            // efi: UEFI 链式加载 EFI 文件（grubx64.efi, bootmgfw.efi, shimx64.efi 等）
+            // linux: 直接加载 Linux 内核（.elf 文件）
+            ComboBox_AddString(hCombo, L"limine (.iso/.img 镜像)");
+            ComboBox_AddString(hCombo, L"efi (.efi 引导程序)");
+            ComboBox_AddString(hCombo, L"linux (.elf 内核文件)");
+            int sel = 0;
+            if (_wcsicmp(g_editEntry->protocol, L"efi") == 0) sel = 1;
+            else if (_wcsicmp(g_editEntry->protocol, L"linux") == 0) sel = 2;
+            ComboBox_SetCurSel(hCombo, sel);
+            y += 35;
+            
+            // 路径
+            CreateWindowExW(0, L"STATIC", L"启动文件：", WS_CHILD | WS_VISIBLE, 15, y, 80, 20, hDlg, NULL, NULL, NULL);
+            CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", g_editEntry->path, WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 100, y, w - 200, 24, hDlg, (HMENU)3301, NULL, NULL);
+            CreateWindowExW(0, L"BUTTON", L"浏览...", WS_CHILD | WS_VISIBLE, w - 90, y, 75, 24, hDlg, (HMENU)3305, NULL, NULL);
+            y += 45;
+            
+            // 按钮
+            CreateWindowExW(0, L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, (w - 180) / 2, y, 80, 28, hDlg, (HMENU)IDOK, NULL, NULL);
+            CreateWindowExW(0, L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE, (w - 180) / 2 + 100, y, 80, 28, hDlg, (HMENU)IDCANCEL, NULL, NULL);
+            
+            // 设置字体
+            HWND hChild = GetWindow(hDlg, GW_CHILD);
+            while (hChild) {
+                SendMessageW(hChild, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+                hChild = GetWindow(hChild, GW_HWNDNEXT);
+            }
+            
+            return 0;
+        }
+        
+        case WM_COMMAND: {
+            switch (LOWORD(wParam)) {
+                case 3305: {  // 浏览
+                    OPENFILENAMEW ofn = {0};
+                    WCHAR szFile[MAX_PATH] = {0};
+                    GetDlgItemTextW(hDlg, 3301, szFile, MAX_PATH);
+                    
+                    ofn.lStructSize = sizeof(ofn);
+                    ofn.hwndOwner = hDlg;
+                    ofn.lpstrFile = szFile;
+                    ofn.nMaxFile = MAX_PATH;
+                    ofn.lpstrFilter = L"支持的文件 (*.iso;*.img;*.efi;*.elf)\0*.iso;*.img;*.efi;*.elf\0ISO 镜像 (*.iso)\0*.iso\0EFI 文件 (*.efi)\0*.efi\0所有文件 (*.*)\0*.*\0";
+                    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+                    
+                    if (GetOpenFileNameW(&ofn)) {
+                        SetDlgItemTextW(hDlg, 3301, szFile);
+                        
+                        // 自动设置名称
+                        WCHAR name[128];
+                        const WCHAR* fn = wcsrchr(szFile, L'\\');
+                        if (fn) fn++; else fn = szFile;
+                        wcsncpy(name, fn, 127);
+                        WCHAR* dot = wcsrchr(name, L'.');
+                        if (dot) *dot = L'\0';
+                        SetDlgItemTextW(hDlg, 3300, name);
+                        
+                        // 自动选择协议
+                        const WCHAR* protocol = DetectProtocolByExtension(szFile);
+                        int sel = 0;
+                        if (_wcsicmp(protocol, L"efi") == 0) sel = 1;
+                        else if (_wcsicmp(protocol, L"linux") == 0) sel = 2;
+                        SendDlgItemMessageW(hDlg, 3302, CB_SETCURSEL, sel, 0);
+                    }
+                    return 0;
+                }
+                
+                case IDOK: {
+                    WCHAR name[128] = {0}, path[MAX_PATH] = {0};
+                    GetDlgItemTextW(hDlg, 3300, name, 128);
+                    GetDlgItemTextW(hDlg, 3301, path, MAX_PATH);
+                    
+                    if (wcslen(name) == 0) {
+                        MessageBoxW(hDlg, L"请输入启动项名称", L"提示", MB_OK | MB_ICONWARNING);
+                        return 0;
+                    }
+                    if (wcslen(path) == 0) {
+                        MessageBoxW(hDlg, L"请选择启动文件", L"提示", MB_OK | MB_ICONWARNING);
+                        return 0;
+                    }
+                    
+                    // 获取协议
+                    int sel = (int)SendDlgItemMessageW(hDlg, 3302, CB_GETCURSEL, 0, 0);
+                    wcscpy(g_editEntry->protocol, L"limine");
+                    if (sel == 1) wcscpy(g_editEntry->protocol, L"efi");
+                    else if (sel == 2) wcscpy(g_editEntry->protocol, L"linux");
+                    
+                    wcsncpy(g_editEntry->name, name, 127);
+                    
+                    // 转换路径格式
+                    // Windows: C:\EFI\Microsoft\Boot\bootmgfw.efi
+                    // Limine 格式取决于协议类型：
+                    // - efi_chain: boot():/path (当前启动设备)
+                    // - limine (ISO): boot:///path (所有设备搜索) 或 boot(disk,part):/path
+                    // - linux: boot():/path
+                    WCHAR liminePath[MAX_PATH] = {0};
+                    
+                    // 找到路径中的 \EFI 或 \boot 等启动相关部分
+                    const WCHAR* efiStart = wcsstr(path, L"\\EFI\\");
+                    const WCHAR* bootStart = wcsstr(path, L"\\boot\\");
+                    const WCHAR* pathStart = NULL;
+                    
+                    if (efiStart) {
+                        pathStart = efiStart + 1;  // 跳过第一个反斜杠
+                    } else if (bootStart) {
+                        pathStart = bootStart + 1;
+                    } else {
+                        // 没有找到标准路径，使用完整路径（去掉盘符）
+                        if (path[1] == L':') {
+                            pathStart = path + 2;  // 跳过 "C:"
+                        } else {
+                            pathStart = path;
+                        }
+                    }
+                    
+                    // 先复制路径并转换反斜杠为正斜杠
+                    WCHAR normalizedPath[MAX_PATH] = {0};
+                    wcsncpy(normalizedPath, pathStart, MAX_PATH - 1);
+                    for (WCHAR* p = normalizedPath; *p; p++) {
+                        if (*p == L'\\') *p = L'/';
+                    }
+                    // normalizedPath 已以 "/" 开头
+                    
+                    // boot:// + normalizedPath = boot:///path （三个斜杠，在所有设备搜索）
+                    swprintf(liminePath, MAX_PATH, L"boot://%s", normalizedPath);
+                    
+                    wcsncpy(g_editEntry->path, liminePath, MAX_PATH - 1);
+                    
+                    DestroyWindow(hDlg);
+                    g_editHwnd = NULL;
+                    return 0;
+                }
+                
+                case IDCANCEL:
+                    DestroyWindow(hDlg);
+                    g_editHwnd = NULL;
+                    return 0;
+            }
+            break;
+        }
+        
+        case WM_CLOSE:
+            DestroyWindow(hDlg);
+            g_editHwnd = NULL;
+            return 0;
+    }
+    
+    return DefWindowProcW(hDlg, msg, wParam, lParam);
+}
+
+// 显示编辑对话框
+static BOOL ShowLimineEditDialog(HWND hParent, LIMINE_CONF_ENTRY* entry, BOOL isAdd)
+{
+    g_editEntry = entry;
+    g_editIsAdd = isAdd;
+    
+    static BOOL registered = FALSE;
+    if (!registered) {
+        WNDCLASSEXW wc = {0};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = LimineEditDlgProc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = L"LimineEditDlgClass";
+        RegisterClassExW(&wc);
+        registered = TRUE;
+    }
+    
+    HWND hDlg = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE,
+        L"LimineEditDlgClass",
+        isAdd ? L"添加启动项" : L"编辑启动项",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        0, 0, 380, 200,
+        hParent, NULL, GetModuleHandleW(NULL), NULL);
+    
+    if (!hDlg) return FALSE;
+    
+    // 居中
+    RECT rcParent, rcDlg;
+    GetWindowRect(hParent, &rcParent);
+    GetWindowRect(hDlg, &rcDlg);
+    int x = rcParent.left + (rcParent.right - rcParent.left - (rcDlg.right - rcDlg.left)) / 2;
+    int y = rcParent.top + (rcParent.bottom - rcParent.top - (rcDlg.bottom - rcDlg.top)) / 2;
+    SetWindowPos(hDlg, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    
+    EnableWindow(hParent, FALSE);
+    ShowWindow(hDlg, SW_SHOW);
+    
+    // 消息循环
+    MSG msg;
+    while (g_editHwnd != NULL || IsWindow(hDlg)) {
+        if (GetMessageW(&msg, NULL, 0, 0)) {
+            if (!IsDialogMessageW(hDlg, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        } else {
+            break;
+        }
+    }
+    
+    EnableWindow(hParent, TRUE);
+    SetForegroundWindow(hParent);
+    
+    return TRUE;
+}
+
+static void BuildLimineControls(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right - CONTENT_PADDING * 2;
-    int h = rc.bottom;
-
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"高级功能",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING, w, 32,
-        hParent, NULL, NULL, NULL);
+    int w = rc.right - 20, y = 50;
+    
+    // 标题
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"Limine 引导管理器", WS_CHILD | WS_VISIBLE, 10, y, w, 28, hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-
-    // ========== 备份卡片 ==========
-    HWND hCard0 = CreateWindowExW(0, L"BUTTON", L" 备份与恢复",
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        CONTENT_PADDING, CONTENT_PADDING + 50, w, 100,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hCard0, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-
-    int bx = CONTENT_PADDING + 20, by = CONTENT_PADDING + 85;
-    #define BTN(id, text, wd) \
-        CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE, bx, by, wd, BTN_HEIGHT, hParent, (HMENU)id, NULL, NULL); \
-        SendMessageW(GetDlgItem(hParent, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); \
-        bx += wd + 12;
-
-    BTN(ID_BTN_BACKUP_MBR, L"备份 MBR", 90);
-    BTN(ID_BTN_BACKUP_BCD, L"备份 BCD", 90);
-    bx = CONTENT_PADDING + 20; by += 40;
-    BTN(ID_BTN_RESTORE, L"恢复备份", 90);
-
-    #undef BTN
-
-    // ========== MBR 修复卡片 ==========
-    HWND hCard1 = CreateWindowExW(0, L"BUTTON", L" MBR 修复",
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        CONTENT_PADDING, CONTENT_PADDING + 165, w, 100,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hCard1, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-
-    HWND hDesc1 = CreateWindowExW(0, L"STATIC",
-        L"恢复 Windows 默认 MBR 引导代码，保留分区表不变。",
-        WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + 16, CONTENT_PADDING + 193, w - 32, 24,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hDesc1, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
-
-    HWND hBtnMbr = CreateWindowExW(0, L"BUTTON", L"修复 MBR",
-        WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + 16, CONTENT_PADDING + 225, 100, BTN_HEIGHT,
-        hParent, (HMENU)ID_BTN_MBR_REPAIR, NULL, NULL);
-    SendMessageW(hBtnMbr, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-
-    // ========== UEFI 修复卡片 ==========
-    HWND hCard2 = CreateWindowExW(0, L"BUTTON", L" UEFI 引导修复",
-        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        CONTENT_PADDING, CONTENT_PADDING + 280, w, 100,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hCard2, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-
-    HWND hDesc2 = CreateWindowExW(0, L"STATIC",
-        L"重建 ESP 分区的 UEFI 引导链，恢复 bootmgfw.efi。",
-        WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + 16, CONTENT_PADDING + 308, w - 32, 24,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hDesc2, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
-
-    HWND hBtnUefi = CreateWindowExW(0, L"BUTTON", L"修复 UEFI 引导",
-        WS_CHILD | WS_VISIBLE,
-        CONTENT_PADDING + 16, CONTENT_PADDING + 340, 120, BTN_HEIGHT,
-        hParent, (HMENU)ID_BTN_UEFI_REPAIR, NULL, NULL);
-    SendMessageW(hBtnUefi, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-
-    HWND hWarn = CreateWindowExW(0, L"STATIC",
-        L"⚠️ 操作需要管理员权限，修改前建议先备份。",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 60, w, 24, hParent, NULL, NULL, NULL);
-    SendMessageW(hWarn, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
-
-    g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪",
-        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, h - 30, w, 24,
-        hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
-    SendMessageW(g_hStatusText, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    y += 35;
+    
+    // 安装按钮行
+    s_limineBtnInstall = CreateWindowExW(0, L"BUTTON", L"安装 Limine", WS_CHILD | WS_VISIBLE, 10, y, 110, BTN_HEIGHT, hParent, (HMENU)ID_BTN_INSTALL_LIMINE, NULL, NULL);
+    SendMessageW(s_limineBtnInstall, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    
+    s_limineBtnUninstall = CreateWindowExW(0, L"BUTTON", L"卸载", WS_CHILD | WS_VISIBLE, 125, y, 70, BTN_HEIGHT, hParent, (HMENU)ID_BTN_UNINSTALL_LIMINE, NULL, NULL);
+    SendMessageW(s_limineBtnUninstall, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    
+    y += 45;
+    
+    // 配置区域标题
+    HWND hConfigTitle = CreateWindowExW(0, L"STATIC", L"启动项配置 (limine.conf)：", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+    SendMessageW(hConfigTitle, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    y += 25;
+    
+    // 列表视图
+    s_limineList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEW, NULL,
+        WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL,
+        10, y, w, 150, hParent, (HMENU)3200, NULL, NULL);
+    ListView_SetExtendedListViewStyle(s_limineList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+    SendMessageW(s_limineList, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    
+    LVCOLUMN lvc = {0};
+    lvc.mask = LVCF_TEXT | LVCF_WIDTH;
+    lvc.pszText = L"#"; lvc.cx = 35;
+    ListView_InsertColumn(s_limineList, 0, &lvc);
+    lvc.pszText = L"名称"; lvc.cx = 100;
+    ListView_InsertColumn(s_limineList, 1, &lvc);
+    lvc.pszText = L"协议"; lvc.cx = 70;
+    ListView_InsertColumn(s_limineList, 2, &lvc);
+    lvc.pszText = L"路径"; lvc.cx = w - 215;
+    ListView_InsertColumn(s_limineList, 3, &lvc);
+    
+    y += 160;
+    
+    // 操作按钮行
+    s_limineBtnAddEntry = CreateWindowExW(0, L"BUTTON", L"添加", WS_CHILD | WS_VISIBLE, 10, y, 60, BTN_HEIGHT, hParent, (HMENU)ID_BTN_LIMINE_ADD, NULL, NULL);
+    SendMessageW(s_limineBtnAddEntry, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    
+    s_limineBtnEditEntry = CreateWindowExW(0, L"BUTTON", L"编辑", WS_CHILD | WS_VISIBLE, 75, y, 60, BTN_HEIGHT, hParent, (HMENU)ID_BTN_LIMINE_EDIT, NULL, NULL);
+    SendMessageW(s_limineBtnEditEntry, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    
+    s_limineBtnDelEntry = CreateWindowExW(0, L"BUTTON", L"删除", WS_CHILD | WS_VISIBLE, 140, y, 60, BTN_HEIGHT, hParent, (HMENU)ID_BTN_LIMINE_DELETE, NULL, NULL);
+    SendMessageW(s_limineBtnDelEntry, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    
+    s_limineBtnRefresh = CreateWindowExW(0, L"BUTTON", L"刷新", WS_CHILD | WS_VISIBLE, 205, y, 60, BTN_HEIGHT, hParent, (HMENU)ID_BTN_LIMINE_REFRESH, NULL, NULL);
+    SendMessageW(s_limineBtnRefresh, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    
+    y += 35;
+    
+    // 提示
+    HWND hHint = CreateWindowExW(0, L"STATIC",
+        L"提示：双击条目可编辑 | 协议：limine(.iso镜像), efi(.efi引导), linux(.elf内核)",
+        WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+    SendMessageW(hHint, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    
+    // 状态栏
+    s_limineStatus = CreateWindowExW(0, L"STATIC", L"检测中...", WS_CHILD | WS_VISIBLE, 10, rc.bottom - 20, w, 20, hParent, NULL, NULL, NULL);
+    SendMessageW(s_limineStatus, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
-// ============================================
+static void LimineRefreshStatus(void)
+{
+    LIMINE_STATUS status = LIMINE_NOT_INSTALLED;
+    s_limineConfDir[0] = L'\0';
+    
+    // 1. 首先检查已挂载的驱动器
+    for (WCHAR d = L'A'; d <= L'Z'; d++) {
+        WCHAR root[4] = {d, L':', L'\\', 0};
+        UINT type = GetDriveTypeW(root);
+        
+        // 跳过无效驱动器和可移动介质
+        if (type == DRIVE_UNKNOWN || type == DRIVE_NO_ROOT_DIR || type == DRIVE_REMOVABLE) {
+            continue;
+        }
+        
+        // 检查 EFI\limine\BOOTX64.EFI
+        WCHAR efiPath[MAX_PATH];
+        swprintf(efiPath, MAX_PATH, L"%c:\\EFI\\limine\\BOOTX64.EFI", d);
+        if (GetFileAttributesW(efiPath) != INVALID_FILE_ATTRIBUTES) {
+            status = LIMINE_INSTALLED_UEFI;
+            swprintf(s_limineConfDir, MAX_PATH, L"%c:\\EFI\\limine", d);
+            break;
+        }
+        
+        // 检查 boot\limine\limine.sys
+        WCHAR bootPath[MAX_PATH];
+        swprintf(bootPath, MAX_PATH, L"%c:\\boot\\limine\\limine.sys", d);
+        if (GetFileAttributesW(bootPath) != INVALID_FILE_ATTRIBUTES) {
+            status = LIMINE_INSTALLED_MBR;
+            swprintf(s_limineConfDir, MAX_PATH, L"%c:\\boot\\limine", d);
+            break;
+        }
+    }
+    
+    // 2. 如果没找到，尝试挂载 ESP 检测
+    if (status == LIMINE_NOT_INSTALLED) {
+        WCHAR esp[4] = {0};
+        BOOL mountedByUs = FALSE;
+        
+        if (EspMountEx(esp, 4, &mountedByUs)) {
+            WCHAR efiPath[MAX_PATH];
+            swprintf(efiPath, MAX_PATH, L"%s\\EFI\\limine\\BOOTX64.EFI", esp);
+            
+            if (GetFileAttributesW(efiPath) != INVALID_FILE_ATTRIBUTES) {
+                status = LIMINE_INSTALLED_UEFI;
+                swprintf(s_limineConfDir, MAX_PATH, L"%s\\EFI\\limine", esp);
+            }
+            
+            // 如果是我们挂载的，需要保持挂载状态以便读取配置
+            // 不在这里卸载
+        }
+    }
+    
+    BOOL installed = (status != LIMINE_NOT_INSTALLED);
+    
+    if (s_limineBtnInstall) EnableWindow(s_limineBtnInstall, !installed);
+    if (s_limineBtnUninstall) EnableWindow(s_limineBtnUninstall, installed);
+    if (s_limineBtnAddEntry) EnableWindow(s_limineBtnAddEntry, installed);
+    if (s_limineBtnEditEntry) EnableWindow(s_limineBtnEditEntry, installed);
+    if (s_limineBtnDelEntry) EnableWindow(s_limineBtnDelEntry, installed);
+    
+    if (s_limineStatus) {
+        WCHAR txt[512];
+        if (installed) {
+            const WCHAR* mode = (status == LIMINE_INSTALLED_UEFI) ? L"UEFI" : L"MBR";
+            swprintf(txt, 512, L"已安装 (%s) [%s]", mode, s_limineConfDir);
+            SetWindowTextW(s_limineStatus, txt);
+            RefreshLimineEntryList();
+        } else {
+            SetWindowTextW(s_limineStatus, L"Limine 未安装 - 点击「安装 Limine」按钮");
+            if (s_limineList) ListView_DeleteAllItems(s_limineList);
+        }
+    }
+}
+
+// 备份恢复页面
+static void BuildBackupRestorePage(HWND hParent)
+{
+    RECT rc; GetClientRect(hParent, &rc);
+    int w = rc.right - 20, y = 10;
+    
+    // 标题
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"备份与恢复", WS_CHILD | WS_VISIBLE, 10, y, w, 28, hParent, NULL, NULL, NULL);
+    SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
+    y += 40;
+    
+    // ===== MBR 备份恢复区域 =====
+    HWND hMbrTitle = CreateWindowExW(0, L"STATIC", L"MBR 备份与修复", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+    SendMessageW(hMbrTitle, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    y += 28;
+    
+    // MBR 按钮行
+    int bx = 10;
+    CreateWindowExW(0, L"BUTTON", L"备份 MBR", WS_CHILD | WS_VISIBLE, bx, y, 100, BTN_HEIGHT, hParent, (HMENU)ID_BTN_BACKUP_MBR, NULL, NULL);
+    SendMessageW(GetDlgItem(hParent, ID_BTN_BACKUP_MBR), WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    bx += 108;
+    
+    CreateWindowExW(0, L"BUTTON", L"恢复 MBR", WS_CHILD | WS_VISIBLE, bx, y, 100, BTN_HEIGHT, hParent, (HMENU)ID_BTN_RESTORE_MBR, NULL, NULL);
+    SendMessageW(GetDlgItem(hParent, ID_BTN_RESTORE_MBR), WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    bx += 108;
+    
+    CreateWindowExW(0, L"BUTTON", L"修复 Windows MBR", WS_CHILD | WS_VISIBLE, bx, y, 130, BTN_HEIGHT, hParent, (HMENU)ID_BTN_MBR_REPAIR, NULL, NULL);
+    SendMessageW(GetDlgItem(hParent, ID_BTN_MBR_REPAIR), WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    y += 45;
+    
+    // MBR 说明
+    HWND hMbrNote = CreateWindowExW(0, L"STATIC",
+        L"说明：MBR（主引导记录）位于磁盘第一个扇区，包含引导代码和分区表。\n"
+        L"• 备份 MBR：保存完整的 MBR 到文件\n"
+        L"• 恢复 MBR：从备份文件恢复 MBR\n"
+        L"• 修复 Windows MBR：将 MBR 引导代码重置为 Windows 标准",
+        WS_CHILD | WS_VISIBLE, 10, y, w, 60, hParent, NULL, NULL, NULL);
+    SendMessageW(hMbrNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    y += 75;
+    
+    // ===== UEFI 修复区域 =====
+    BOOL isUEFI = BootMode_IsUEFIFirmware();
+    
+    HWND hUefiTitle = CreateWindowExW(0, L"STATIC", L"UEFI 引导修复", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+    SendMessageW(hUefiTitle, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    y += 28;
+    
+    if (!isUEFI) {
+        // 非 UEFI 模式提示
+        HWND hUefiNote = CreateWindowExW(0, L"STATIC",
+            L"⚠ 当前系统未运行在 UEFI 模式下，UEFI 修复功能不可用",
+            WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+        SendMessageW(hUefiNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+        y += 25;
+    } else {
+        // UEFI 修复按钮
+        bx = 10;
+        CreateWindowExW(0, L"BUTTON", L"修复 UEFI 引导", WS_CHILD | WS_VISIBLE, bx, y, 120, BTN_HEIGHT, hParent, (HMENU)ID_BTN_UEFI_REPAIR, NULL, NULL);
+        SendMessageW(GetDlgItem(hParent, ID_BTN_UEFI_REPAIR), WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+        y += 45;
+        
+        // UEFI 说明
+        HWND hUefiNote = CreateWindowExW(0, L"STATIC",
+            L"说明：修复 UEFI 引导可以解决以下问题：\n"
+            L"• Windows Boot Manager 丢失或损坏\n"
+            L"• ESP 分区引导文件缺失\n"
+            L"• NVRAM 启动项丢失",
+            WS_CHILD | WS_VISIBLE, 10, y, w, 60, hParent, NULL, NULL, NULL);
+        SendMessageW(hUefiNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+        y += 70;
+    }
+    
+    // 状态栏
+    HWND hStatus = CreateWindowExW(0, L"STATIC", L"就绪", WS_CHILD | WS_VISIBLE, 10, rc.bottom - 30, w, 20, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
+    SendMessageW(hStatus, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+}
+
 // 关于页面
-// ============================================
 static void BuildAboutPage(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right;
-    int h = rc.bottom;
-    int cx = w / 2;
+    int w = rc.right - 32, y = 32;
     
-    HWND hLogo = CreateWindowExW(0, L"STATIC", L"⚙",
-        WS_CHILD | WS_VISIBLE | SS_CENTER, cx - 30, 60, 60, 50,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hLogo, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"关于", WS_CHILD | WS_VISIBLE, 32, y, w, 32, hParent, NULL, NULL, NULL);
+    SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
     
-    HWND hName = CreateWindowExW(0, L"STATIC", L"Boot Manager Pro",
-        WS_CHILD | WS_VISIBLE | SS_CENTER, cx - 150, 120, 300, 32,
-        hParent, NULL, NULL, NULL);
+    y += 50;
+    HWND hName = CreateWindowExW(0, L"STATIC", L"Boot Manager Pro v3.2.0", WS_CHILD | WS_VISIBLE, 32, y, w, 28, hParent, NULL, NULL, NULL);
     SendMessageW(hName, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
     
-    HWND hVer = CreateWindowExW(0, L"STATIC", L"Version 3.2.0",
-        WS_CHILD | WS_VISIBLE | SS_CENTER, cx - 150, 155, 300, 24,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hVer, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    
-    HWND hDesc = CreateWindowExW(0, L"STATIC",
-        L"专业的 UEFI 引导管理工具\n支持启动项管理、rEFInd 安装、系统备份修复",
-        WS_CHILD | WS_VISIBLE | SS_CENTER, cx - 200, 220, 400, 50,
-        hParent, NULL, NULL, NULL);
+    y += 40;
+    HWND hDesc = CreateWindowExW(0, L"STATIC", L"UEFI/MBR 启动项管理工具", WS_CHILD | WS_VISIBLE, 32, y, w, 150, hParent, NULL, NULL, NULL);
     SendMessageW(hDesc, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    
-    HWND hDev = CreateWindowExW(0, L"STATIC", L"Developed by OpenClaw Team",
-        WS_CHILD | WS_VISIBLE | SS_CENTER, cx - 150, 320, 300, 24,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hDev, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
-    
-    HWND hLic = CreateWindowExW(0, L"STATIC", L"MIT License",
-        WS_CHILD | WS_VISIBLE | SS_CENTER, cx - 150, 350, 300, 24,
-        hParent, NULL, NULL, NULL);
-    SendMessageW(hLic, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
-// ============================================
-// 刷新启动项列表
-// ============================================
 static void RefreshBootList(void)
 {
     if (!g_hListView) return;
     ListView_DeleteAllItems(g_hListView);
-    
     if (g_bootList) UefiFreeBootList(g_bootList);
-    g_bootList = NULL;
-
-    // 每次刷新都重新扫描固件启动项，避免外部工具修改后仍显示旧缓存
     g_bootList = UefiScanBootEntries();
-    if (!g_bootList || g_bootList->count == 0) {
-        if (g_bootList) {
-            UefiFreeBootList(g_bootList);
-            g_bootList = NULL;
-        }
-        Sleep(120);
-        g_bootList = UefiScanBootEntries();
-    }
-
-    if (!g_bootList || g_bootList->count == 0) {
-        LVITEM lvi = {0}; lvi.mask = LVIF_TEXT;
-        lvi.pszText = L"0001"; lvi.iItem = 0;
+    if (!g_bootList) return;
+    
+    UEFI_BOOT_ENTRY_WRAPPER* e = g_bootList->entries;
+    int i = 0;
+    while (e) {
+        LVITEMW lvi = {0};
+        lvi.mask = LVIF_TEXT;
+        lvi.iItem = i;
+        WCHAR id[16]; swprintf(id, 16, L"%04X", e->id);
+        lvi.pszText = id;
         ListView_InsertItem(g_hListView, &lvi);
-        ListView_SetItemText(g_hListView, 0, 1, L"Windows Boot Manager");
-        ListView_SetItemText(g_hListView, 0, 2, L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi");
-        return;
+        ListView_SetItemText(g_hListView, i, 1, e->name);
+        ListView_SetItemText(g_hListView, i, 2, e->filePath);
+        e = e->next; i++;
+    }
+}
+
+static BOOL ResolveRefindSourcePath(WCHAR* path, DWORD size)
+{
+    // 获取程序所在目录
+    WCHAR exeDir[MAX_PATH];
+    GetModuleFileNameW(NULL, exeDir, MAX_PATH);
+    WCHAR* slash = wcsrchr(exeDir, L'\\');
+    if (slash) *slash = L'\0';
+    
+    // 查找 refind 目录
+    WCHAR testPath[MAX_PATH];
+    
+    // 1. 程序目录\refind
+    swprintf(testPath, MAX_PATH, L"%s\\refind\\refind_x64.efi", exeDir);
+    if (GetFileAttributesW(testPath) != INVALID_FILE_ATTRIBUTES) {
+        swprintf(path, size, L"%s\\refind", exeDir);
+        return TRUE;
     }
     
-    UEFI_BOOT_ENTRY_WRAPPER* entry = g_bootList->entries;
-    int idx = 0;
-    while (entry) {
-        WCHAR id[16]; swprintf(id, 16, L"%04X", entry->id);
-        LVITEM lvi = {0}; lvi.mask = LVIF_TEXT; lvi.iItem = idx; lvi.pszText = id;
-        ListView_InsertItem(g_hListView, &lvi);
-        ListView_SetItemText(g_hListView, idx, 1, entry->name);
-        ListView_SetItemText(g_hListView, idx, 2, entry->filePath);
-        entry = entry->next; idx++;
+    // 2. Z:\refind (开发环境)
+    if (GetFileAttributesW(L"Z:\\refind\\refind_x64.efi") != INVALID_FILE_ATTRIBUTES) {
+        wcsncpy(path, L"Z:\\refind", size);
+        return TRUE;
     }
+    
+    return FALSE;
+}
+
+static BOOL ResolveLimineSourcePath(WCHAR* path, DWORD size)
+{
+    // 获取程序所在目录
+    WCHAR exeDir[MAX_PATH];
+    GetModuleFileNameW(NULL, exeDir, MAX_PATH);
+    WCHAR* slash = wcsrchr(exeDir, L'\\');
+    if (slash) *slash = L'\0';
+    
+    WCHAR testPath[MAX_PATH];
+    
+    // 1. 程序目录\limine\limine-bios.sys (BIOS)
+    swprintf(testPath, MAX_PATH, L"%s\\limine\\limine-bios.sys", exeDir);
+    if (GetFileAttributesW(testPath) != INVALID_FILE_ATTRIBUTES) {
+        swprintf(path, size, L"%s\\limine", exeDir);
+        return TRUE;
+    }
+    
+    // 2. 程序目录\limine\limine-efi\BOOTX64.EFI (UEFI)
+    swprintf(testPath, MAX_PATH, L"%s\\limine\\limine-efi\\BOOTX64.EFI", exeDir);
+    if (GetFileAttributesW(testPath) != INVALID_FILE_ATTRIBUTES) {
+        swprintf(path, size, L"%s\\limine", exeDir);
+        return TRUE;
+    }
+    
+    // 3. 程序目录\limine\BOOTX64.EFI (简化结构)
+    swprintf(testPath, MAX_PATH, L"%s\\limine\\BOOTX64.EFI", exeDir);
+    if (GetFileAttributesW(testPath) != INVALID_FILE_ATTRIBUTES) {
+        swprintf(path, size, L"%s\\limine", exeDir);
+        return TRUE;
+    }
+    
+    // 4. Z:\limine (开发环境)
+    if (GetFileAttributesW(L"Z:\\limine\\limine-bios.sys") != INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesW(L"Z:\\limine\\limine-efi\\BOOTX64.EFI") != INVALID_FILE_ATTRIBUTES) {
+        wcsncpy(path, L"Z:\\limine", size);
+        return TRUE;
+    }
+    
+    return FALSE;
+}
+
+// ============================================
+// MBR 管理页面实现
+// ============================================
+
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPWSTR lpCmdLine, int nCmdShow)
+{
+    InitCommonControls();
+    InitFonts();
+    RegisterContentClass();  // 注册内容容器窗口类
+    
+    WNDCLASSEXW wc = {0};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = MainWndProc;
+    wc.hInstance = hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = CreateSolidBrush(COLOR_BG_MAIN);
+    wc.lpszClassName = L"BootManagerProClass";
+    RegisterClassExW(&wc);
+    
+    g_hMainWnd = CreateWindowExW(0, L"BootManagerProClass", L"Boot Manager Pro v3.2.0",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, WINDOW_WIDTH, WINDOW_HEIGHT, NULL, NULL, hInst, NULL);
+    
+    ShowWindow(g_hMainWnd, nCmdShow);
+    UpdateWindow(g_hMainWnd);
+    
+    MSG msg;
+    while (GetMessageW(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    return (int)msg.wParam;
 }

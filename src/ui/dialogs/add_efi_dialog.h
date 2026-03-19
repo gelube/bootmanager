@@ -51,10 +51,12 @@ typedef struct {
     
     PARTITION_INFO* partitions;  // 分区列表
     INT partitionCount;          // 分区数量
+    
+    BOOL selectedDiskHasEsp;     // 选中的磁盘是否有 ESP 分区
 } ADD_EFI_DIALOG_DATA;
 
 // 函数声明
-BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter);
+BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter, BOOL* outHasEsp);
 
 // 辅助函数
 INT EnumPhysicalDisks(DISK_INFO** disks);

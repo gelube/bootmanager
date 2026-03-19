@@ -559,6 +559,54 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
                     return 0;
                 }
 
+                // 检查选中的磁盘是否有 ESP 分区
+                BOOL selectedHasEsp = FALSE;
+                if (data->selectedDisk >= 0 && data->selectedDisk < data->diskCount && data->disks) {
+                    selectedHasEsp = data->disks[data->selectedDisk].hasESP;
+                }
+                // 也检查分区列表
+                if (!selectedHasEsp && data->partitionCount > 0 && data->partitions) {
+                    for (INT i = 0; i < data->partitionCount; i++) {
+                        if (data->partitions[i].isESP) {
+                            selectedHasEsp = TRUE;
+                            break;
+                        }
+                    }
+                }
+                
+                if (!selectedHasEsp) {
+                    MessageBoxW(hDlg, 
+                        L"选中的磁盘没有 ESP 分区\n\n"
+                        L"UEFI 启动项必须位于 ESP 分区上。\n"
+                        L"请选择一个有 ESP 分区的磁盘。", 
+                        L"错误", MB_OK | MB_ICONERROR);
+                    return 0;
+                }
+
+                // 检查是否选择了有效的 ESP 分区
+                // 如果路径是相对路径（\EFI\xxx），必须选择 ESP 分区
+                if (data->filePath[0] == L'\\' && data->filePath[1] != L':') {
+                    if (data->partitionCount <= 0 || !data->partitions || 
+                        data->selectedPartition < 0 || data->selectedPartition >= data->partitionCount) {
+                        MessageBoxW(hDlg, 
+                            L"未检测到 ESP 分区\n\n"
+                            L"UEFI 启动项必须位于 ESP 分区上。\n"
+                            L"请选择一个 FAT32 分区，或使用浏览按钮选择 ESP 上的文件。", 
+                            L"错误", MB_OK | MB_ICONERROR);
+                        return 0;
+                    }
+                    // 分区存在，允许继续（即使没有盘符，后续会尝试挂载）
+                }
+
+                // 如果路径是绝对路径（X:\xxx），检查文件是否存在
+                if (data->filePath[1] == L':') {
+                    if (GetFileAttributesW(data->filePath) == INVALID_FILE_ATTRIBUTES) {
+                        MessageBoxW(hDlg, L"指定的 EFI 文件不存在", L"错误", MB_OK | MB_ICONERROR);
+                        return 0;
+                    }
+                    // 文件存在，允许继续（无论是否在 ESP 上）
+                }
+
                 // 选中分区有盘符且输入相对 EFI 路径时，补全为绝对路径
                 if (data->selectedPartition >= 0 && data->partitions &&
                     data->selectedPartition < data->partitionCount &&
@@ -601,7 +649,7 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
     return DefWindowProcW(hDlg, msg, wParam, lParam);
 }
 
-static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter)
+static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter, BOOL* outHasEsp)
 {
     static const WCHAR kAddEfiDialogClass[] = L"BootManagerAddEfiDialog";
     static BOOL classRegistered = FALSE;
@@ -777,6 +825,26 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath,
         } else if (outDriveLetter) {
             outDriveLetter[0] = L'\0';
         }
+        
+        // 设置选中磁盘是否有 ESP 的标志
+        data.selectedDiskHasEsp = FALSE;
+        if (data.selectedDisk >= 0 && data.selectedDisk < data.diskCount && data.disks) {
+            data.selectedDiskHasEsp = data.disks[data.selectedDisk].hasESP;
+        }
+        // 也检查分区列表
+        if (!data.selectedDiskHasEsp && data.partitionCount > 0 && data.partitions) {
+            for (INT i = 0; i < data.partitionCount; i++) {
+                if (data.partitions[i].isESP) {
+                    data.selectedDiskHasEsp = TRUE;
+                    break;
+                }
+            }
+        }
+        
+        // 输出是否有 ESP
+        if (outHasEsp) {
+            *outHasEsp = data.selectedDiskHasEsp;
+        }
     }
 
     // 释放资源
@@ -786,7 +854,7 @@ static INT_PTR CreateAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath,
     return data.result;
 }
 
-BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter)
+BOOL ShowAddEfiDialog(HWND hParent, WCHAR* outTitle, WCHAR* outPath, WCHAR* outDriveLetter, BOOL* outHasEsp)
 {
-    return CreateAddEfiDialog(hParent, outTitle, outPath, outDriveLetter) == IDOK;
+    return CreateAddEfiDialog(hParent, outTitle, outPath, outDriveLetter, outHasEsp) == IDOK;
 }

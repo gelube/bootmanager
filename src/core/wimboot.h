@@ -1,6 +1,10 @@
 /**
  * WIM/VHD Boot Entry Management
  * 支持多种启动类型：WIM, VHD, RAM, WinPE, eSD, ISO
+ * 
+ * 特性：
+ * - 支持 PE 环境离线操作（使用 bcdedit /store）
+ * - ISO 启动需要先安装 Limine
  */
 
 #ifndef WIMBOOT_H
@@ -8,6 +12,16 @@
 
 #include <windows.h>
 #include <stdio.h>
+
+// ============================================
+// 错误信息
+// ============================================
+
+/**
+ * 获取最后的错误信息
+ * @return 错误信息字符串
+ */
+const WCHAR* WimbootGetLastErrorMessage(void);
 
 // ============================================
 // WIM 启动项

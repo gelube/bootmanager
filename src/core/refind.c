@@ -155,6 +155,8 @@ BOOL RefindIsInstalled(const WCHAR* espDrive)
 
 // ============================================
 // 安装 rEFInd
+// 只复制文件到 \EFI\refind\，通过 NVRAM 启动项引导
+// 不覆盖 \EFI\Boot\bootx64.efi
 // ============================================
 BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
 {
@@ -162,10 +164,6 @@ BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
     const WCHAR* targetEsp = NULL;
     WCHAR srcFile[MAX_PATH];
     WCHAR destRefindDir[MAX_PATH];
-    WCHAR destBootDir[MAX_PATH];
-    WCHAR bootxEfi[MAX_PATH];
-    WCHAR backupPath[MAX_PATH];
-    WCHAR refindEfi[MAX_PATH];
 
     g_refindLastError[0] = L'\0';
 
@@ -201,23 +199,12 @@ BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
 
     // 目标路径
     swprintf(destRefindDir, MAX_PATH, L"%s\\EFI\\refind", targetEsp);
-    swprintf(destBootDir, MAX_PATH, L"%s\\EFI\\Boot", targetEsp);
-    swprintf(bootxEfi, MAX_PATH, L"%s\\bootx64.efi", destBootDir);
-    swprintf(backupPath, MAX_PATH, L"%s\\bootx64.efi.bak", destBootDir);
 
     // 创建目录
-    if (!CreateDirectoryRecursive(destBootDir) || !CreateDirectoryRecursive(destRefindDir)) {
+    if (!CreateDirectoryRecursive(destRefindDir)) {
         RefindSetError(L"创建目标目录失败");
         if (targetEsp == autoEsp) RefindUnmountESP(autoEsp);
         return FALSE;
-    }
-
-    // 备份原有 bootx64.efi
-    if (GetFileAttributesW(bootxEfi) != INVALID_FILE_ATTRIBUTES) {
-        if (GetFileAttributesW(backupPath) != INVALID_FILE_ATTRIBUTES) {
-            DeleteFileW(backupPath);
-        }
-        CopyFileW(bootxEfi, backupPath, FALSE);
     }
 
     // 复制 rEFInd 文件
@@ -225,17 +212,6 @@ BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
         RefindSetError(L"复制 rEFInd 文件失败");
         if (targetEsp == autoEsp) RefindUnmountESP(autoEsp);
         return FALSE;
-    }
-
-    // 复制 refind_x64.efi 到 bootx64.efi
-    swprintf(refindEfi, MAX_PATH, L"%s\\refind_x64.efi", destRefindDir);
-    if (!CopyFileW(refindEfi, bootxEfi, FALSE)) {
-        DeleteFileW(bootxEfi);
-        if (!CopyFileW(refindEfi, bootxEfi, FALSE)) {
-            RefindSetError(L"设置 bootx64.efi 失败");
-            if (targetEsp == autoEsp) RefindUnmountESP(autoEsp);
-            return FALSE;
-        }
     }
 
     // 注册到 NVRAM
@@ -282,57 +258,36 @@ BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
 
 // ============================================
 // 卸载 rEFInd
+// 只删除 \EFI\refind\ 目录和 NVRAM 启动项
+// 不影响 \EFI\Boot\bootx64.efi
 // ============================================
 BOOL RefindUninstall(const WCHAR* espDrive)
 {
-    WCHAR autoEsp[4] = {0};
-    const WCHAR* targetEsp = NULL;
-
+    WCHAR refindDir[MAX_PATH];
+    
+    if (!espDrive || wcslen(espDrive) < 1) return FALSE;
+    
     g_refindLastError[0] = L'\0';
-
-    // 挂载 ESP
-    if (espDrive && wcslen(espDrive) >= 2 && espDrive[1] == L':') {
-        targetEsp = espDrive;
-    } else {
-        if (!RefindMountESP(autoEsp, 4)) {
-            RefindSetError(L"挂载 ESP 分区失败");
-            return FALSE;
-        }
-        targetEsp = autoEsp;
-    }
-
-    WCHAR destRefindDir[MAX_PATH];
-    WCHAR destBootDir[MAX_PATH];
-    WCHAR bootxEfi[MAX_PATH];
-    WCHAR backupPath[MAX_PATH];
-    WCHAR windowsEfi[MAX_PATH];
-
-    swprintf(destRefindDir, MAX_PATH, L"%s\\EFI\\refind", targetEsp);
-    swprintf(destBootDir, MAX_PATH, L"%s\\EFI\\Boot", targetEsp);
-    swprintf(bootxEfi, MAX_PATH, L"%s\\bootx64.efi", destBootDir);
-    swprintf(backupPath, MAX_PATH, L"%s\\bootx64.efi.bak", destBootDir);
-    swprintf(windowsEfi, MAX_PATH, L"%s\\EFI\\Microsoft\\Boot\\bootmgfw.efi", targetEsp);
-
-    // 1. 恢复 bootx64.efi
-    BOOL restored = FALSE;
-    if (GetFileAttributesW(backupPath) != INVALID_FILE_ATTRIBUTES) {
-        DeleteFileW(bootxEfi);
-        if (CopyFileW(backupPath, bootxEfi, FALSE)) {
-            DeleteFileW(backupPath);
-            restored = TRUE;
+    
+    // 删除 EFI\refind 目录
+    swprintf(refindDir, MAX_PATH, L"%s\\EFI\\refind", espDrive);
+    if (GetFileAttributesW(refindDir) != INVALID_FILE_ATTRIBUTES) {
+        // 使用 cmd 删除目录（更可靠）
+        STARTUPINFOW si = {0};
+        PROCESS_INFORMATION pi = {0};
+        WCHAR cmd[MAX_PATH];
+        swprintf(cmd, MAX_PATH, L"cmd.exe /c rmdir /s /q \"%s\"", refindDir);
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+        if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, 5000);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
         }
     }
-    if (!restored && GetFileAttributesW(windowsEfi) != INVALID_FILE_ATTRIBUTES) {
-        DeleteFileW(bootxEfi);
-        CopyFileW(windowsEfi, bootxEfi, FALSE);
-    }
 
-    // 2. 删除 rEFInd 目录
-    if (GetFileAttributesW(destRefindDir) != INVALID_FILE_ATTRIBUTES) {
-        DeleteDirectoryRecursive(destRefindDir);
-    }
-
-    // 3. 从 NVRAM 删除 rEFInd 启动项
+    // 从 NVRAM 删除 rEFInd 启动项
     if (UefiNvramAcquirePrivilege()) {
         UEFI_BOOT_ORDER bo = {0};
         if (UefiNvramGetBootOrder(&bo) && bo.Count > 0) {
@@ -351,38 +306,38 @@ BOOL RefindUninstall(const WCHAR* espDrive)
                 }
             }
             
-            // 构建新的 BootOrder（排除 rEFInd）
-            UINT16* newOrder = (UINT16*)malloc(bo.Count * sizeof(UINT16));
-            DWORD newCount = 0;
+            // 删除找到的 rEFInd 启动项
+            for (DWORD i = 0; i < refindCount; i++) {
+                UefiNvramDeleteBootEntry(refindBoots[i]);
+            }
             
-            for (DWORD i = 0; i < bo.Count; i++) {
-                BOOL isRefind = FALSE;
-                for (DWORD j = 0; j < refindCount; j++) {
-                    if (bo.Order[i] == refindBoots[j]) {
-                        isRefind = TRUE;
-                        break;
+            // 重建 BootOrder（排除已删除的项）
+            if (refindCount > 0) {
+                UINT16* newOrder = (UINT16*)malloc((bo.Count - refindCount) * sizeof(UINT16));
+                if (newOrder) {
+                    DWORD newCount = 0;
+                    for (DWORD i = 0; i < bo.Count; i++) {
+                        BOOL isRefind = FALSE;
+                        for (DWORD j = 0; j < refindCount; j++) {
+                            if (bo.Order[i] == refindBoots[j]) {
+                                isRefind = TRUE;
+                                break;
+                            }
+                        }
+                        if (!isRefind) {
+                            newOrder[newCount++] = bo.Order[i];
+                        }
                     }
+                    if (newCount > 0) {
+                        UefiNvramSetBootOrder(newOrder, newCount);
+                    }
+                    free(newOrder);
                 }
-                if (!isRefind) {
-                    newOrder[newCount++] = bo.Order[i];
-                }
-            }
-            
-            // 更新 BootOrder
-            if (newCount > 0) {
-                UefiNvramSetBootOrder(newOrder, newCount);
-            }
-            free(newOrder);
-            UefiNvramFreeBootOrder(&bo);
-            
-            // 删除 rEFInd 的 BootXXXX 变量
-            for (DWORD j = 0; j < refindCount; j++) {
-                UefiNvramDeleteBootEntry(refindBoots[j]);
             }
         }
+        if (bo.Order) UefiNvramFreeBootOrder(&bo);
     }
 
-    if (targetEsp == autoEsp) RefindUnmountESP(autoEsp);
     return TRUE;
 }
 

@@ -1,0 +1,5 @@
+Output size: 69
+Output:
+The boot configuration data store could not be opened.
+???????????
+

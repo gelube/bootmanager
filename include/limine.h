@@ -74,6 +74,14 @@ typedef struct _LIMINE_PARTITION_LIST {
 LIMINE_STATUS LimineCheckInstalled(const WCHAR* drive);
 
 /**
+ * 智能检测 Limine 安装状态（自动挂载 ESP）
+ * @param outEspDrive 输出 ESP 盘符（可选）
+ * @param outSize 缓冲区大小
+ * @return 安装状态
+ */
+LIMINE_STATUS LimineCheckInstalledAuto(WCHAR* outEspDrive, DWORD outSize);
+
+/**
  * 安装 Limine 到 MBR (BIOS 模式)
  * @param diskIndex 磁盘索引
  * @param limineSource Limine 源文件目录
