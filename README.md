@@ -9,31 +9,59 @@
 ### 1. UEFI 启动项管理
 - 扫描 UEFI 固件启动项（读取 `BootOrder`，解析 `BootXXXX`）
 - 添加 / 删除 UEFI 启动项
-- 调整启动顺序
+- 调整启动顺序（上移 / 下移）
 - 设置默认启动项
 
+说明：管理的是 UEFI 固件里的启动项，不等同于 rEFInd 的 `menuentry`。
+
 ### 2. 第三方引导管理器
+
 支持安装和管理流行的第三方 UEFI 引导管理器：
 
 **rEFInd**
-- 自动检测并安装到 ESP 分区
-- 卸载时自动清理 NVRAM 启动项
+- 安装 / 卸载 rEFInd 到 ESP 分区
+- 自动注册到 NVRAM 启动项
+- 卸载时自动清理 NVRAM
 
 **Limine**
-- 现代化的引导加载器
-- 支持启动项配置管理（limine.conf）
-- 自动扫描系统中的 EFI 文件
+- 安装 / 卸载 Limine 到 ESP 分区
+- 启动项配置管理（limine.conf）
+- 自动扫描系统中的 EFI 文件（Windows、Linux 等）
+- 支持添加自定义启动项（ISO、EFI、Linux 内核）
 
 ### 3. 备份与恢复
-- **MBR 备份与恢复**：备份/恢复磁盘主引导记录
-- **修复 Windows MBR**：重置 MBR 引导代码
-- **UEFI 引导修复**：修复损坏的 UEFI 引导
+- **MBR 备份**：备份磁盘主引导记录（512 字节）
+- **MBR 恢复**：从备份恢复 MBR（可选保留分区表）
+- **修复 Windows MBR**：使用 `bootrec /fixmbr` 修复
+- **UEFI 引导修复**：使用 `bcdboot` 修复 UEFI 引导
 
 ## 系统要求
 
 - Windows 10/11 x64
 - **UEFI 固件模式**（推荐）
 - 管理员权限
+
+## 代码结构
+
+```text
+src/
+  ui/
+    main.c                 # 主窗口与页面逻辑
+    dialogs/
+      add_efi_dialog.c     # 添加 EFI 启动项对话框
+  core/
+    uefi.c                 # UEFI 启动项管理
+    uefi_nvram.c           # NVRAM 底层操作
+    refind.c               # rEFInd 安装/卸载
+    limine.c               # Limine 安装/卸载/配置
+    backup.c               # 备份与恢复
+    esp.c                  # ESP 分区挂载
+    boot_mode.c            # 启动模式检测
+include/
+  # 头文件
+dist/
+  BootManagerPro.exe       # 编译输出
+```
 
 ## 编译
 
