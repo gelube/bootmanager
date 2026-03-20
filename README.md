@@ -1,4 +1,4 @@
-# Boot Manager Pro v3.2.0
+# Boot Manager Pro v1.0
 
 一个面向 Windows 的 **UEFI 引导管理工具**，提供 UEFI 启动项管理、第三方引导管理器安装、引导备份与修复功能。
 
