@@ -72,6 +72,3 @@ dist/
 | [Limine](https://github.com/limine-bootloader/limine) | BSD-2-Clause |
 | [rEFInd](https://www.rodsbooks.com/refind/) | GPL-3.0 |
 
-## 许可证
-
-MIT License
