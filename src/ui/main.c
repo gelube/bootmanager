@@ -17,17 +17,35 @@
 #include "../../include/boot_mode.h"
 #include "../../include/mbr_manager.h"
 
-// 颜色
-#define COLOR_BG_MAIN       RGB(250, 250, 252)
-#define COLOR_TEXT_PRIMARY  RGB(17, 24, 39)
+// 颜色 - 现代浅色主题 (统一风格)
+#define COLOR_BG_MAIN           RGB(240, 253, 250)   // #F0FDFA 浅青背景
+#define COLOR_SIDEBAR           RGB(255, 255, 255)   // 纯白侧边栏
+#define COLOR_CONTENT           RGB(248, 250, 252)   // 内容区浅灰
+#define COLOR_CARD              RGB(255, 255, 255)   // 卡片白色
+#define COLOR_CARD_BORDER       RGB(226, 232, 240)   // 卡片边框
+#define COLOR_TEXT_PRIMARY      RGB(15, 23, 42)      // #0F172A 深色文字
+#define COLOR_TEXT_SECONDARY    RGB(100, 116, 139)   // #64748B 次要文字
+#define COLOR_ACCENT            RGB(6, 182, 212)     // #06B6D4 主色调青色
+#define COLOR_ACCENT_HOVER      RGB(14, 165, 233)    // #0EA5E9 悬停色
+#define COLOR_ACCENT_LIGHT      RGB(236, 254, 255)   // #ECFEFF 浅青背景
+#define COLOR_CTA               RGB(6, 182, 212)     // CTA 按钮
+#define COLOR_CTA_HOVER         RGB(2, 132, 199)     // CTA 悬停
+#define COLOR_SUCCESS           RGB(34, 197, 94)     // 成功绿
+#define COLOR_WARNING           RGB(251, 146, 60)    // 警告橙
+#define COLOR_ERROR             RGB(239, 68, 68)     // 错误红
+#define COLOR_BORDER            RGB(226, 232, 240)   // 边框颜色
+#define COLOR_LIST_HEADER       RGB(241, 245, 249)   // 列表头背景
+#define COLOR_LIST_ALT          RGB(248, 250, 252)   // 列表交替行
 
 // 尺寸
-#define WINDOW_WIDTH        1000
-#define WINDOW_HEIGHT       720
-#define SIDEBAR_WIDTH       220
-#define NAV_ITEM_HEIGHT     48
-#define BTN_HEIGHT          38
-#define TAB_HEIGHT          28
+#define WINDOW_WIDTH        1100
+#define WINDOW_HEIGHT       780
+#define SIDEBAR_WIDTH       240
+#define NAV_ITEM_HEIGHT     52
+#define BTN_HEIGHT          40
+#define BTN_WIDTH           100
+#define TAB_HEIGHT          32
+#define CONTENT_PADDING     24
 
 // 控件 ID
 enum {
@@ -64,7 +82,334 @@ static int g_currentPage = 0;
 static int g_currentThirdPartyTab = 0;
 static HFONT g_fontTitle = NULL, g_fontBody = NULL, g_fontSmall = NULL;
 static HWND g_navItems[4] = {0};
+static int g_navHoverIndex = -1;  // 悬停的导航项索引
+static int g_navPressedIndex = -1;  // 按下的导航项索引
 static UEFI_BOOT_LIST* g_bootList = NULL;
+
+// 导航按钮窗口过程
+static LRESULT CALLBACK NavButtonProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    static HBRUSH hBrushNormal = NULL;
+    static HBRUSH hBrushHover = NULL;
+    static HBRUSH hBrushSelected = NULL;
+    
+    switch (msg) {
+        case WM_CREATE: {
+            // 创建画刷
+            if (!hBrushNormal) hBrushNormal = CreateSolidBrush(COLOR_SIDEBAR);
+            if (!hBrushHover) hBrushHover = CreateSolidBrush(COLOR_ACCENT_LIGHT);
+            if (!hBrushSelected) hBrushSelected = CreateSolidBrush(COLOR_ACCENT_LIGHT);
+            return 0;
+        }
+        
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+            RECT rc;
+            GetClientRect(hWnd, &rc);
+            
+            // 获取按钮状态
+            int index = -1;
+            for (int i = 0; i < 4; i++) {
+                if (g_navItems[i] == hWnd) { index = i; break; }
+            }
+            
+            BOOL isSelected = (index == g_currentPage);
+            BOOL isHover = (index == g_navHoverIndex);
+            
+            // 绘制背景
+            if (isSelected) {
+                FillRect(hdc, &rc, hBrushSelected);
+            } else if (isHover) {
+                FillRect(hdc, &rc, hBrushHover);
+            } else {
+                FillRect(hdc, &rc, hBrushNormal);
+            }
+            
+            // 绘制左边框（选中时显示主题色）
+            if (isSelected) {
+                HPEN hPen = CreatePen(PS_SOLID, 3, COLOR_ACCENT);
+                HPEN hOldPen = SelectObject(hdc, hPen);
+                MoveToEx(hdc, 0, 10, NULL);
+                LineTo(hdc, 0, rc.bottom - 10);
+                SelectObject(hdc, hOldPen);
+                DeleteObject(hPen);
+            }
+            
+            // 绘制文字
+            WCHAR text[64];
+            GetWindowTextW(hWnd, text, 64);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, isSelected ? COLOR_ACCENT : COLOR_TEXT_PRIMARY);
+            HFONT hFont = (HFONT)SendMessageW(hWnd, WM_GETFONT, 0, 0);
+            HFONT hOldFont = SelectObject(hdc, hFont);
+            
+            // 居中绘制文字
+            RECT textRc = rc;
+            textRc.left += 16;  // 左边距
+            DrawTextW(hdc, text, -1, &textRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            
+            SelectObject(hdc, hOldFont);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+        
+        case WM_MOUSEMOVE: {
+            int index = -1;
+            for (int i = 0; i < 4; i++) {
+                if (g_navItems[i] == hWnd) { index = i; break; }
+            }
+            if (index != g_navHoverIndex) {
+                int oldHover = g_navHoverIndex;
+                g_navHoverIndex = index;
+                if (oldHover >= 0 && oldHover < 4 && g_navItems[oldHover]) {
+                    InvalidateRect(g_navItems[oldHover], NULL, FALSE);
+                }
+                InvalidateRect(hWnd, NULL, FALSE);
+            }
+            
+            // 追踪鼠标离开
+            TRACKMOUSEEVENT tme = {0};
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hWnd;
+            TrackMouseEvent(&tme);
+            return 0;
+        }
+        
+        case WM_MOUSELEAVE: {
+            int index = -1;
+            for (int i = 0; i < 4; i++) {
+                if (g_navItems[i] == hWnd) { index = i; break; }
+            }
+            if (index == g_navHoverIndex) {
+                g_navHoverIndex = -1;
+                InvalidateRect(hWnd, NULL, FALSE);
+            }
+            return 0;
+        }
+        
+        case WM_LBUTTONDOWN: {
+            g_navPressedIndex = -1;
+            for (int i = 0; i < 4; i++) {
+                if (g_navItems[i] == hWnd) { g_navPressedIndex = i; break; }
+            }
+            return 0;
+        }
+        
+        case WM_LBUTTONUP: {
+            // 触发父窗口的导航切换
+            int index = -1;
+            for (int i = 0; i < 4; i++) {
+                if (g_navItems[i] == hWnd) { index = i; break; }
+            }
+            if (index >= 0 && index == g_navPressedIndex) {
+                SendMessageW(GetParent(hWnd), WM_COMMAND, ID_NAV_BOOT_MGR + index, 0);
+            }
+            g_navPressedIndex = -1;
+            return 0;
+        }
+    }
+    
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+// 注册导航按钮类
+static void RegisterNavButtonClass(void)
+{
+    static BOOL registered = FALSE;
+    if (registered) return;
+    
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = NavButtonProc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.hCursor = LoadCursorW(NULL, IDC_HAND);  // 手型光标
+    wc.hbrBackground = (HBRUSH)COLOR_WINDOW;
+    wc.lpszClassName = L"NavButtonClass";
+    RegisterClassW(&wc);
+    registered = TRUE;
+}
+
+// ============================================
+// 扁平按钮类 - 内容区域使用，风格与导航一致
+// ============================================
+
+static LRESULT CALLBACK FlatBtnProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+        case WM_CREATE: {
+            // 初始化状态
+            SetPropW(hWnd, L"Hover", NULL);
+            SetPropW(hWnd, L"Pressed", NULL);
+            return 0;
+        }
+        
+        case WM_DESTROY: {
+            RemovePropW(hWnd, L"Hover");
+            RemovePropW(hWnd, L"Pressed");
+            RemovePropW(hWnd, L"IsPrimary");
+            return 0;
+        }
+        
+        case WM_ENABLE: {
+            InvalidateRect(hWnd, NULL, FALSE);
+            return 0;
+        }
+        
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+            RECT rc;
+            GetClientRect(hWnd, &rc);
+            
+            BOOL isDisabled = !IsWindowEnabled(hWnd);
+            BOOL isHover = (GetPropW(hWnd, L"Hover") != NULL);
+            BOOL isPressed = (GetPropW(hWnd, L"Pressed") != NULL);
+            BOOL isPrimary = (GetPropW(hWnd, L"IsPrimary") != NULL);
+            
+            // 确定背景颜色 - 与左侧导航风格一致
+            HBRUSH hBrush;
+            COLORREF textColor;
+            
+            if (isDisabled) {
+                hBrush = CreateSolidBrush(COLOR_CARD);
+                textColor = COLOR_TEXT_SECONDARY;
+            } else if (isPrimary) {
+                // 主按钮：青色背景
+                if (isPressed) {
+                    hBrush = CreateSolidBrush(COLOR_ACCENT_HOVER);
+                } else if (isHover) {
+                    hBrush = CreateSolidBrush(COLOR_ACCENT_HOVER);
+                } else {
+                    hBrush = CreateSolidBrush(COLOR_ACCENT);
+                }
+                textColor = RGB(255, 255, 255);
+            } else {
+                // 次要按钮：与导航项风格一致
+                if (isPressed) {
+                    hBrush = CreateSolidBrush(COLOR_BORDER);
+                    textColor = COLOR_TEXT_PRIMARY;
+                } else if (isHover) {
+                    hBrush = CreateSolidBrush(COLOR_ACCENT_LIGHT);
+                    textColor = COLOR_ACCENT;
+                } else {
+                    hBrush = CreateSolidBrush(COLOR_CARD);
+                    textColor = COLOR_TEXT_PRIMARY;
+                }
+            }
+            
+            // 绘制背景（无边框，扁平风格）
+            FillRect(hdc, &rc, hBrush);
+            
+            // 绘制文字
+            WCHAR text[128];
+            GetWindowTextW(hWnd, text, 128);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, textColor);
+            HFONT hFont = (HFONT)SendMessageW(hWnd, WM_GETFONT, 0, 0);
+            HFONT hOldFont = SelectObject(hdc, hFont);
+            DrawTextW(hdc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, hOldFont);
+            
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+        
+        case WM_MOUSEMOVE: {
+            if (!IsWindowEnabled(hWnd)) return 0;
+            
+            if (!GetPropW(hWnd, L"Hover")) {
+                SetPropW(hWnd, L"Hover", (HANDLE)1);
+                InvalidateRect(hWnd, NULL, FALSE);
+            }
+            
+            TRACKMOUSEEVENT tme = {0};
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hWnd;
+            TrackMouseEvent(&tme);
+            return 0;
+        }
+        
+        case WM_MOUSELEAVE: {
+            RemovePropW(hWnd, L"Hover");
+            RemovePropW(hWnd, L"Pressed");
+            InvalidateRect(hWnd, NULL, FALSE);
+            return 0;
+        }
+        
+        case WM_LBUTTONDOWN: {
+            if (!IsWindowEnabled(hWnd)) return 0;
+            SetPropW(hWnd, L"Pressed", (HANDLE)1);
+            InvalidateRect(hWnd, NULL, FALSE);
+            SetCapture(hWnd);
+            return 0;
+        }
+        
+        case WM_LBUTTONUP: {
+            BOOL wasPressed = GetPropW(hWnd, L"Pressed") != NULL;
+            RemovePropW(hWnd, L"Pressed");
+            ReleaseCapture();
+            
+            POINT pt;
+            pt.x = LOWORD(lParam);
+            pt.y = HIWORD(lParam);
+            RECT rc;
+            GetClientRect(hWnd, &rc);
+            
+            if (wasPressed && PtInRect(&rc, pt)) {
+                SendMessageW(GetParent(hWnd), WM_COMMAND, GetDlgCtrlID(hWnd), 0);
+            }
+            InvalidateRect(hWnd, NULL, FALSE);
+            return 0;
+        }
+        
+        case WM_KEYDOWN: {
+            if (wParam == VK_SPACE || wParam == VK_RETURN) {
+                if (IsWindowEnabled(hWnd)) {
+                    SendMessageW(GetParent(hWnd), WM_COMMAND, GetDlgCtrlID(hWnd), 0);
+                }
+                return 0;
+            }
+            break;
+        }
+    }
+    
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+// 注册扁平按钮类
+static void RegisterFlatButtonClass(void)
+{
+    static BOOL registered = FALSE;
+    if (registered) return;
+    
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = FlatBtnProc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.hCursor = LoadCursorW(NULL, IDC_HAND);
+    wc.hbrBackground = (HBRUSH)COLOR_WINDOW;
+    wc.lpszClassName = L"FlatBtnClass";
+    RegisterClassW(&wc);
+    registered = TRUE;
+}
+
+// 创建扁平按钮的辅助函数
+static HWND CreateFlatButton(HWND hParent, int x, int y, int w, int h, const WCHAR* text, int id, BOOL isPrimary)
+{
+    HWND hWnd = CreateWindowExW(0, L"FlatBtnClass", text,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        x, y, w, h, hParent, (HMENU)id, NULL, NULL);
+    
+    if (hWnd) {
+        SendMessageW(hWnd, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+        // 设置主要按钮样式
+        if (isPrimary) {
+            SetPropW(hWnd, L"IsPrimary", (HANDLE)1);
+        }
+    }
+    return hWnd;
+}
 
 // 内容容器窗口过程 - 转发消息到主窗口
 static LRESULT CALLBACK ContentWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -94,8 +439,43 @@ static void RegisterContentClass(void)
     wc.lpfnWndProc = ContentWndProc;
     wc.hInstance = GetModuleHandleW(NULL);
     wc.lpszClassName = L"BootManagerContentClass";
-    wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    wc.hbrBackground = CreateSolidBrush(COLOR_CONTENT);  // 统一背景色
     RegisterClassW(&wc);
+}
+
+// 绘制卡片边框（圆角矩形效果）
+static void DrawCard(HDC hdc, RECT* rc, const WCHAR* title)
+{
+    // 绘制背景
+    FillRect(hdc, rc, CreateSolidBrush(COLOR_CARD));
+    
+    // 绘制边框
+    HPEN hPen = CreatePen(PS_SOLID, 1, COLOR_CARD_BORDER);
+    HPEN hOldPen = SelectObject(hdc, hPen);
+    HBRUSH hOldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    Rectangle(hdc, rc->left, rc->top, rc->right, rc->bottom);
+    SelectObject(hdc, hOldBrush);
+    SelectObject(hdc, hOldPen);
+    DeleteObject(hPen);
+    
+    // 绘制标题背景条
+    if (title && title[0]) {
+        RECT titleRc = {rc->left + 1, rc->top + 1, rc->right - 1, rc->top + 36};
+        FillRect(hdc, &titleRc, CreateSolidBrush(COLOR_ACCENT_LIGHT));
+        
+        // 绘制标题文字
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, COLOR_TEXT_PRIMARY);
+        HFONT hFont = CreateFontW(14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+        HFONT hOldFont = SelectObject(hdc, hFont);
+        titleRc.left += 12;
+        titleRc.top += 8;
+        DrawTextW(hdc, title, -1, &titleRc, DT_LEFT | DT_TOP | DT_SINGLELINE);
+        SelectObject(hdc, hOldFont);
+        DeleteObject(hFont);
+    }
 }
 
 // 函数声明
@@ -114,6 +494,31 @@ static BOOL ResolveRefindSourcePath(WCHAR*, DWORD);
 static BOOL ResolveLimineSourcePath(WCHAR*, DWORD);
 static BOOL MountESP(WCHAR*);
 static BOOL UnmountESP(WCHAR);
+static void ApplyDarkTitleBar(HWND hWnd);  // 应用深色标题栏
+
+// 应用深色标题栏 (Windows 10 1809+)
+static void ApplyDarkTitleBar(HWND hWnd)
+{
+    // DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Windows 11)
+    // DWMWA_USE_IMMERSIVE_DARK_MODE = 19 (Windows 10 2004+)
+    typedef HRESULT(WINAPI* DwmSetWindowAttributeFunc)(HWND, DWORD, LPCVOID, DWORD);
+    
+    HMODULE hDwm = LoadLibraryW(L"dwmapi.dll");
+    if (hDwm) {
+        DwmSetWindowAttributeFunc pDwmSetWindowAttribute = 
+            (DwmSetWindowAttributeFunc)GetProcAddress(hDwm, "DwmSetWindowAttribute");
+        if (pDwmSetWindowAttribute) {
+            // 尝试 Windows 11 的值
+            BOOL value = TRUE;
+            HRESULT hr = pDwmSetWindowAttribute(hWnd, 20, &value, sizeof(value));
+            if (FAILED(hr)) {
+                // 尝试 Windows 10 的值
+                pDwmSetWindowAttribute(hWnd, 19, &value, sizeof(value));
+            }
+        }
+        FreeLibrary(hDwm);
+    }
+}
 
 static void InitFonts(void)
 {
@@ -471,6 +876,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_CREATE:
         CreateNavigation(hWnd);
         CreateContentArea(hWnd);
+        ApplyDarkTitleBar(hWnd);  // 应用深色标题栏
         SwitchPage(0);
         return 0;
         
@@ -478,7 +884,46 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         HDC hdc = (HDC)wParam;
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLOR_TEXT_PRIMARY);
-        return (LRESULT)CreateSolidBrush(COLOR_BG_MAIN);
+        return (LRESULT)CreateSolidBrush(COLOR_CONTENT);
+    }
+    
+    case WM_CTLCOLORBTN: {
+        // 按钮背景色
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, COLOR_TEXT_PRIMARY);
+        return (LRESULT)CreateSolidBrush(COLOR_CONTENT);
+    }
+    
+    case WM_MOUSEMOVE: {
+        // 导航按钮悬停效果
+        POINT pt;
+        pt.x = LOWORD(lParam);
+        pt.y = HIWORD(lParam);
+        
+        int newHover = -1;
+        for (int i = 0; i < 4; i++) {
+            RECT rc;
+            GetWindowRect(g_navItems[i], &rc);
+            ScreenToClient(hWnd, (POINT*)&rc.left);
+            ScreenToClient(hWnd, (POINT*)&rc.right);
+            if (PtInRect(&rc, pt)) {
+                newHover = i;
+                break;
+            }
+        }
+        
+        if (newHover != g_navHoverIndex) {
+            g_navHoverIndex = newHover;
+            InvalidateRect(hWnd, NULL, FALSE);
+        }
+        break;
+    }
+    
+    case WM_MOUSELEAVE: {
+        g_navHoverIndex = -1;
+        InvalidateRect(hWnd, NULL, FALSE);
+        break;
     }
         
     case WM_COMMAND: {
@@ -981,21 +1426,40 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 static void CreateNavigation(HWND hWnd)
 {
-    CreateWindowExW(0, L"STATIC", NULL, WS_CHILD | WS_VISIBLE, 0, 0, SIDEBAR_WIDTH, WINDOW_HEIGHT, hWnd, NULL, NULL, NULL);
+    // 侧边栏背景 - 白色
+    HWND hSidebar = CreateWindowExW(0, L"STATIC", NULL, 
+        WS_CHILD | WS_VISIBLE | SS_WHITERECT, 
+        0, 0, SIDEBAR_WIDTH, WINDOW_HEIGHT, hWnd, NULL, NULL, NULL);
     
-    HWND hLogo = CreateWindowExW(0, L"STATIC", L"⚙ Boot Manager", WS_CHILD | WS_VISIBLE, 24, 24, SIDEBAR_WIDTH - 48, 32, hWnd, NULL, NULL, NULL);
+    // Logo 和标题 - 使用主色调
+    HWND hLogo = CreateWindowExW(0, L"STATIC", L"Boot Manager Pro", 
+        WS_CHILD | WS_VISIBLE, 24, 28, SIDEBAR_WIDTH - 48, 32, hWnd, NULL, NULL, NULL);
     SendMessageW(hLogo, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
     
+    // 版本号 - 次要文字色
+    HWND hVer = CreateWindowExW(0, L"STATIC", L"v1.0", 
+        WS_CHILD | WS_VISIBLE, 24, 56, SIDEBAR_WIDTH - 48, 20, hWnd, NULL, NULL, NULL);
+    SendMessageW(hVer, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    
+    // 分隔线
+    HWND hSeparator = CreateWindowExW(0, L"STATIC", NULL, 
+        WS_CHILD | WS_VISIBLE | SS_ETCHEDHORZ, 
+        24, 90, SIDEBAR_WIDTH - 48, 2, hWnd, NULL, NULL, NULL);
+    
+    // 导航项 - 中英双语
     struct { int id; const WCHAR* text; } items[] = {
-        { ID_NAV_BOOT_MGR, L"引导管理" },
-        { ID_NAV_THIRD_PARTY, L"第三方引导管理器" },
-        { ID_NAV_BACKUP_RESTORE, L"备份恢复" },
-        { ID_NAV_ABOUT, L"关于" }
+        { ID_NAV_BOOT_MGR, L"  ⚙ 引导管理 / Boot" },
+        { ID_NAV_THIRD_PARTY, L"  📦 第三方引导 / 3rd Party" },
+        { ID_NAV_BACKUP_RESTORE, L"  💾 备份恢复 / Backup" },
+        { ID_NAV_ABOUT, L"  ℹ 关于 / About" }
     };
     
-    int y = 100;
+    int y = 110;
     for (int i = 0; i < 4; i++) {
-        g_navItems[i] = CreateWindowExW(0, L"BUTTON", items[i].text, WS_CHILD | WS_VISIBLE, 16, y, SIDEBAR_WIDTH - 32, NAV_ITEM_HEIGHT, hWnd, (HMENU)(UINT_PTR)items[i].id, NULL, NULL);
+        g_navItems[i] = CreateWindowExW(0, L"BUTTON", items[i].text, 
+            WS_CHILD | WS_VISIBLE | BS_LEFT | BS_FLAT, 
+            12, y, SIDEBAR_WIDTH - 24, NAV_ITEM_HEIGHT, 
+            hWnd, (HMENU)(UINT_PTR)items[i].id, NULL, NULL);
         SendMessageW(g_navItems[i], WM_SETFONT, (WPARAM)g_fontBody, TRUE);
         y += NAV_ITEM_HEIGHT + 8;
     }
@@ -1044,51 +1508,64 @@ static void SwitchPage(int page)
 static void BuildBootMgrPage(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
+    int w = rc.right - CONTENT_PADDING * 2;
     
     // 检查是否为 UEFI 模式
     BOOL isUEFI = BootMode_IsUEFIFirmware();
     
-    int y = 10;
+    int y = CONTENT_PADDING;
     
-    // 标题
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"UEFI 启动项管理", WS_CHILD | WS_VISIBLE, 10, y, rc.right - 20, 28, hParent, NULL, NULL, NULL);
+    // 标题区
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"UEFI 启动项管理 / Boot Entries", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 28, hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
     y += 35;
+    
+    // 说明文字
+    HWND hDesc = CreateWindowExW(0, L"STATIC", 
+        L"管理 UEFI 启动项：添加、删除、调整顺序、设置默认 / Manage UEFI boot entries", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 22, hParent, NULL, NULL, NULL);
+    SendMessageW(hDesc, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    y += 30;
     
     if (!isUEFI) {
         // 非 UEFI 模式提示
         HWND hInfo = CreateWindowExW(0, L"STATIC",
-            L"⚠ 当前系统未运行在 UEFI 模式下\n\n"
-            L"UEFI 启动项管理功能仅在 UEFI 固件模式下可用。\n"
-            L"请在 BIOS 设置中启用 UEFI 启动模式。",
-            WS_CHILD | WS_VISIBLE, 10, y, rc.right - 20, 100, hParent, NULL, NULL, NULL);
+            L"⚠ 当前系统未运行在 UEFI 模式下\n"
+            L"Current system is not running in UEFI mode\n\n"
+            L"请在 BIOS 设置中启用 UEFI 启动模式\n"
+            L"Please enable UEFI boot mode in BIOS settings",
+            WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 100, hParent, NULL, NULL, NULL);
         SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
         return;
     }
     
     // UEFI 启动项列表
-    g_hListView = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEW, NULL,
-        WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL, 10, y, rc.right - 20, rc.bottom - y - 60, hParent, (HMENU)ID_LIST_BOOT, NULL, NULL);
+    g_hListView = CreateWindowExW(0, WC_LISTVIEW, NULL,
+        WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL, 
+        CONTENT_PADDING, y, w, rc.bottom - y - 70, hParent, (HMENU)ID_LIST_BOOT, NULL, NULL);
     ListView_SetExtendedListViewStyle(g_hListView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
     
     LVCOLUMN lvc = {0}; lvc.mask = LVCF_TEXT | LVCF_WIDTH;
     lvc.pszText = L"ID"; lvc.cx = 70; ListView_InsertColumn(g_hListView, 0, &lvc);
-    lvc.pszText = L"名称"; lvc.cx = 200; ListView_InsertColumn(g_hListView, 1, &lvc);
-    lvc.pszText = L"路径"; lvc.cx = rc.right - 290; ListView_InsertColumn(g_hListView, 2, &lvc);
+    lvc.pszText = L"名称 / Name"; lvc.cx = 200; ListView_InsertColumn(g_hListView, 1, &lvc);
+    lvc.pszText = L"路径 / Path"; lvc.cx = w - 280; ListView_InsertColumn(g_hListView, 2, &lvc);
     
     RefreshBootList();
     
-    int bx = 10, by = rc.bottom - 50;
-    #define B(id, t, w) CreateWindowExW(0, L"BUTTON", t, WS_CHILD | WS_VISIBLE, bx, by, w, BTN_HEIGHT, hParent, (HMENU)id, NULL, NULL); SendMessageW(GetDlgItem(hParent, id), WM_SETFONT, (WPARAM)g_fontBody, TRUE); bx += w + 8;
-    B(ID_BTN_REFRESH, L"刷新", 70);
-    B(ID_BTN_ADD_ENTRY, L"添加", 70);
-    B(ID_BTN_DELETE_ENTRY, L"删除", 70);
-    B(ID_BTN_MOVE_UP, L"↑", 50);
-    B(ID_BTN_MOVE_DOWN, L"↓", 50);
-    B(ID_BTN_SET_DEFAULT, L"默认", 70);
-    #undef B
+    // 按钮行 - 使用扁平按钮
+    int bx = CONTENT_PADDING, by = rc.bottom - 50;
+    int btnH = 36;
+    CreateFlatButton(hParent, bx, by, 80, btnH, L"刷新 / Refresh", ID_BTN_REFRESH, FALSE); bx += 88;
+    CreateFlatButton(hParent, bx, by, 80, btnH, L"添加 / Add", ID_BTN_ADD_ENTRY, TRUE); bx += 88;
+    CreateFlatButton(hParent, bx, by, 80, btnH, L"删除 / Delete", ID_BTN_DELETE_ENTRY, FALSE); bx += 88;
+    CreateFlatButton(hParent, bx, by, 50, btnH, L"↑", ID_BTN_MOVE_UP, FALSE); bx += 58;
+    CreateFlatButton(hParent, bx, by, 50, btnH, L"↓", ID_BTN_MOVE_DOWN, FALSE); bx += 58;
+    CreateFlatButton(hParent, bx, by, 110, btnH, L"设为默认 / Default", ID_BTN_SET_DEFAULT, FALSE);
     
-    g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪", WS_CHILD | WS_VISIBLE, 10, rc.bottom - 20, rc.right - 20, 20, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
+    // 状态栏
+    g_hStatusText = CreateWindowExW(0, L"STATIC", L"就绪 / Ready", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, rc.bottom - 18, w, 18, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
     SendMessageW(g_hStatusText, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
@@ -1096,32 +1573,37 @@ static void BuildBootMgrPage(HWND hParent)
 static void BuildThirdPartyPage(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
+    int w = rc.right - CONTENT_PADDING * 2;
     BOOL isUEFI = BootMode_IsUEFIFirmware();
     
     // MBR 模式下显示提示
     if (!isUEFI) {
-        int y = 50;
+        int y = CONTENT_PADDING;
         
-        HWND hTitle = CreateWindowExW(0, L"STATIC", L"第三方引导管理器", WS_CHILD | WS_VISIBLE, 10, y, rc.right - 20, 28, hParent, NULL, NULL, NULL);
+        HWND hTitle = CreateWindowExW(0, L"STATIC", L"第三方引导管理器 / 3rd Party Bootloader", 
+            WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 28, hParent, NULL, NULL, NULL);
         SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-        y += 50;
+        y += 40;
         
         HWND hInfo = CreateWindowExW(0, L"STATIC",
-            L"⚠ 当前为 Legacy BIOS (MBR) 模式\n\n"
-            L"rEFInd 仅支持 UEFI 模式。\n"
-            L"Limine MBR 版本请在「引导管理 → MBR 管理」页面安装。",
-            WS_CHILD | WS_VISIBLE, 10, y, rc.right - 20, 100, hParent, NULL, NULL, NULL);
+            L"⚠ 当前为 Legacy BIOS (MBR) 模式\n"
+            L"Current system is in Legacy BIOS (MBR) mode\n\n"
+            L"rEFInd 和 Limine UEFI 版本仅支持 UEFI 模式\n"
+            L"rEFInd and Limine UEFI require UEFI mode",
+            WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 80, hParent, NULL, NULL, NULL);
         SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
         return;
     }
     
-    // UEFI 模式：显示 rEFInd 和 Limine (UEFI版)
-    HWND hTab = CreateWindowExW(0, WC_TABCONTROL, NULL, WS_CHILD | WS_VISIBLE, 10, 10, rc.right - 20, TAB_HEIGHT, hParent, (HMENU)ID_TAB_THIRD_PARTY, NULL, NULL);
+    // UEFI 模式：显示 Tab
+    HWND hTab = CreateWindowExW(0, WC_TABCONTROL, NULL, 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, CONTENT_PADDING, w, 28, 
+        hParent, (HMENU)ID_TAB_THIRD_PARTY, NULL, NULL);
     SendMessageW(hTab, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
     
     TCITEMW tci = {0}; tci.mask = TCIF_TEXT;
     tci.pszText = L"rEFInd"; TabCtrl_InsertItem(hTab, 0, &tci);
-    tci.pszText = L"Limine (UEFI)"; TabCtrl_InsertItem(hTab, 1, &tci);
+    tci.pszText = L"Limine"; TabCtrl_InsertItem(hTab, 1, &tci);
     
     TabCtrl_SetCurSel(hTab, g_currentThirdPartyTab);
     
@@ -1138,35 +1620,41 @@ static void BuildThirdPartyPage(HWND hParent)
 static void BuildRefindControls(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right - 20, y = 50;
+    int w = rc.right - CONTENT_PADDING * 2;
+    int y = CONTENT_PADDING + TAB_HEIGHT + 15;
     
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"rEFInd 引导管理器", WS_CHILD | WS_VISIBLE, 10, y, w, 28, hParent, NULL, NULL, NULL);
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"rEFInd 引导管理器 / Boot Manager", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 28, hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-    y += 40;
-    
-    HWND hDesc = CreateWindowExW(0, L"STATIC", L"rEFInd 是现代化的 UEFI 引导管理器，安装后会自动检测并列出所有操作系统。", WS_CHILD | WS_VISIBLE, 10, y, w, 24, hParent, NULL, NULL, NULL);
-    SendMessageW(hDesc, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
     y += 35;
     
-    HWND hInfo = CreateWindowExW(0, L"STATIC", L"安装位置: ESP 分区 \\EFI\\refind\\", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
-    SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    HWND hDesc = CreateWindowExW(0, L"STATIC", 
+        L"现代化的 UEFI 引导管理器，自动检测并列出所有操作系统\nModern UEFI bootloader with auto OS detection", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 22, hParent, NULL, NULL, NULL);
+    SendMessageW(hDesc, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
     y += 30;
     
-    HWND hRes = CreateWindowExW(0, L"STATIC", L"资源文件: 程序目录下的 refind\\ 文件夹", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
-    SendMessageW(hRes, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
+    HWND hInfo = CreateWindowExW(0, L"STATIC", 
+        L"安装位置 / Install location: ESP\\EFI\\refind\\", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 18, hParent, NULL, NULL, NULL);
+    SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
     y += 45;
     
-    s_refindBtnInstall = CreateWindowExW(0, L"BUTTON", L"安装 rEFInd", WS_CHILD | WS_VISIBLE, 10, y, 130, BTN_HEIGHT, hParent, (HMENU)ID_BTN_INSTALL, NULL, NULL);
-    SendMessageW(s_refindBtnInstall, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    // 按钮行 - 使用扁平按钮
+    s_refindBtnInstall = CreateFlatButton(hParent, CONTENT_PADDING, y, 130, 36, L"安装 / Install", ID_BTN_INSTALL, TRUE);
+    s_refindBtnUninstall = CreateFlatButton(hParent, CONTENT_PADDING + 140, y, 100, 36, L"卸载 / Uninstall", ID_BTN_UNINSTALL, FALSE);
+    y += 55;
     
-    s_refindBtnUninstall = CreateWindowExW(0, L"BUTTON", L"卸载 rEFInd", WS_CHILD | WS_VISIBLE, 150, y, 130, BTN_HEIGHT, hParent, (HMENU)ID_BTN_UNINSTALL, NULL, NULL);
-    SendMessageW(s_refindBtnUninstall, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    y += 60;
-    
-    HWND hNote = CreateWindowExW(0, L"STATIC", L"说明：\n• rEFInd 安装后会自动扫描系统\n• 支持检测 Windows、Linux、macOS\n• 需要 refind_x64.efi 文件", WS_CHILD | WS_VISIBLE, 10, y, w, 80, hParent, NULL, NULL, NULL);
+    HWND hNote = CreateWindowExW(0, L"STATIC", 
+        L"• 安装后自动扫描系统 / Auto-scan after install\n"
+        L"• 支持 Windows、Linux、macOS\n"
+        L"• 需要 refind\\ 文件夹 / Requires refind\\ folder", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 60, hParent, NULL, NULL, NULL);
     SendMessageW(hNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
     
-    s_refindStatus = CreateWindowExW(0, L"STATIC", L"检测中...", WS_CHILD | WS_VISIBLE, 10, rc.bottom - 20, w, 20, hParent, NULL, NULL, NULL);
+    // 状态栏
+    s_refindStatus = CreateWindowExW(0, L"STATIC", L"检测中... / Detecting...", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, rc.bottom - 25, w, 18, hParent, NULL, NULL, NULL);
     SendMessageW(s_refindStatus, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
@@ -1181,7 +1669,7 @@ static void RefindRefreshStatus(void)
     
     if (s_refindBtnInstall) EnableWindow(s_refindBtnInstall, !installed);
     if (s_refindBtnUninstall) EnableWindow(s_refindBtnUninstall, installed);
-    if (s_refindStatus) SetWindowTextW(s_refindStatus, installed ? L"rEFInd 已安装" : L"rEFInd 未安装");
+    if (s_refindStatus) SetWindowTextW(s_refindStatus, installed ? L"✓ rEFInd 已安装 / Installed" : L"rEFInd 未安装 / Not installed");
 }
 
 // 解析 limine.conf
@@ -1627,31 +2115,31 @@ static BOOL ShowLimineEditDialog(HWND hParent, LIMINE_CONF_ENTRY* entry, BOOL is
 static void BuildLimineControls(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right - 20, y = 50;
+    int w = rc.right - CONTENT_PADDING * 2;
+    int y = CONTENT_PADDING + TAB_HEIGHT + 15;
     
     // 标题
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"Limine 引导管理器", WS_CHILD | WS_VISIBLE, 10, y, w, 28, hParent, NULL, NULL, NULL);
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"Limine 引导管理器 / Boot Manager", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 28, hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-    y += 35;
+    y += 40;
     
-    // 安装按钮行
-    s_limineBtnInstall = CreateWindowExW(0, L"BUTTON", L"安装 Limine", WS_CHILD | WS_VISIBLE, 10, y, 110, BTN_HEIGHT, hParent, (HMENU)ID_BTN_INSTALL_LIMINE, NULL, NULL);
-    SendMessageW(s_limineBtnInstall, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    // 安装按钮行 - 使用扁平按钮
+    s_limineBtnInstall = CreateFlatButton(hParent, CONTENT_PADDING, y, 130, 36, L"安装 / Install", ID_BTN_INSTALL_LIMINE, TRUE);
+    s_limineBtnUninstall = CreateFlatButton(hParent, CONTENT_PADDING + 140, y, 100, 36, L"卸载 / Uninstall", ID_BTN_UNINSTALL_LIMINE, FALSE);
     
-    s_limineBtnUninstall = CreateWindowExW(0, L"BUTTON", L"卸载", WS_CHILD | WS_VISIBLE, 125, y, 70, BTN_HEIGHT, hParent, (HMENU)ID_BTN_UNINSTALL_LIMINE, NULL, NULL);
-    SendMessageW(s_limineBtnUninstall, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    
-    y += 45;
+    y += 50;
     
     // 配置区域标题
-    HWND hConfigTitle = CreateWindowExW(0, L"STATIC", L"启动项配置 (limine.conf)：", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+    HWND hConfigTitle = CreateWindowExW(0, L"STATIC", L"启动项配置 / Boot Entries", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 22, hParent, NULL, NULL, NULL);
     SendMessageW(hConfigTitle, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    y += 25;
+    y += 28;
     
     // 列表视图
-    s_limineList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEW, NULL,
+    s_limineList = CreateWindowExW(0, WC_LISTVIEW, NULL,
         WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL,
-        10, y, w, 150, hParent, (HMENU)3200, NULL, NULL);
+        CONTENT_PADDING, y, w, 160, hParent, (HMENU)3200, NULL, NULL);
     ListView_SetExtendedListViewStyle(s_limineList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
     SendMessageW(s_limineList, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
     
@@ -1659,38 +2147,32 @@ static void BuildLimineControls(HWND hParent)
     lvc.mask = LVCF_TEXT | LVCF_WIDTH;
     lvc.pszText = L"#"; lvc.cx = 35;
     ListView_InsertColumn(s_limineList, 0, &lvc);
-    lvc.pszText = L"名称"; lvc.cx = 100;
+    lvc.pszText = L"名称 / Name"; lvc.cx = 120;
     ListView_InsertColumn(s_limineList, 1, &lvc);
-    lvc.pszText = L"协议"; lvc.cx = 70;
+    lvc.pszText = L"协议 / Proto"; lvc.cx = 70;
     ListView_InsertColumn(s_limineList, 2, &lvc);
-    lvc.pszText = L"路径"; lvc.cx = w - 215;
+    lvc.pszText = L"路径 / Path"; lvc.cx = w - 235;
     ListView_InsertColumn(s_limineList, 3, &lvc);
     
-    y += 160;
+    y += 170;
     
-    // 操作按钮行
-    s_limineBtnAddEntry = CreateWindowExW(0, L"BUTTON", L"添加", WS_CHILD | WS_VISIBLE, 10, y, 60, BTN_HEIGHT, hParent, (HMENU)ID_BTN_LIMINE_ADD, NULL, NULL);
-    SendMessageW(s_limineBtnAddEntry, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    // 操作按钮行 - 使用扁平按钮
+    s_limineBtnAddEntry = CreateFlatButton(hParent, CONTENT_PADDING, y, 80, 36, L"添加 / Add", ID_BTN_LIMINE_ADD, TRUE);
+    s_limineBtnEditEntry = CreateFlatButton(hParent, CONTENT_PADDING + 88, y, 80, 36, L"编辑 / Edit", ID_BTN_LIMINE_EDIT, FALSE);
+    s_limineBtnDelEntry = CreateFlatButton(hParent, CONTENT_PADDING + 176, y, 80, 36, L"删除 / Del", ID_BTN_LIMINE_DELETE, FALSE);
+    s_limineBtnRefresh = CreateFlatButton(hParent, CONTENT_PADDING + 264, y, 90, 36, L"刷新 / Refresh", ID_BTN_LIMINE_REFRESH, FALSE);
     
-    s_limineBtnEditEntry = CreateWindowExW(0, L"BUTTON", L"编辑", WS_CHILD | WS_VISIBLE, 75, y, 60, BTN_HEIGHT, hParent, (HMENU)ID_BTN_LIMINE_EDIT, NULL, NULL);
-    SendMessageW(s_limineBtnEditEntry, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    
-    s_limineBtnDelEntry = CreateWindowExW(0, L"BUTTON", L"删除", WS_CHILD | WS_VISIBLE, 140, y, 60, BTN_HEIGHT, hParent, (HMENU)ID_BTN_LIMINE_DELETE, NULL, NULL);
-    SendMessageW(s_limineBtnDelEntry, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    
-    s_limineBtnRefresh = CreateWindowExW(0, L"BUTTON", L"刷新", WS_CHILD | WS_VISIBLE, 205, y, 60, BTN_HEIGHT, hParent, (HMENU)ID_BTN_LIMINE_REFRESH, NULL, NULL);
-    SendMessageW(s_limineBtnRefresh, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    
-    y += 35;
+    y += 45;
     
     // 提示
     HWND hHint = CreateWindowExW(0, L"STATIC",
-        L"提示：双击条目可编辑 | 协议：limine(.iso镜像), efi(.efi引导), linux(.elf内核)",
-        WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+        L"双击编辑 / Double-click to edit | limine=镜像/ISO, efi=引导程序/EFI, linux=内核/Kernel",
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 18, hParent, NULL, NULL, NULL);
     SendMessageW(hHint, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
     
     // 状态栏
-    s_limineStatus = CreateWindowExW(0, L"STATIC", L"检测中...", WS_CHILD | WS_VISIBLE, 10, rc.bottom - 20, w, 20, hParent, NULL, NULL, NULL);
+    s_limineStatus = CreateWindowExW(0, L"STATIC", L"检测中... / Detecting...", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, rc.bottom - 25, w, 18, hParent, NULL, NULL, NULL);
     SendMessageW(s_limineStatus, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
@@ -1773,76 +2255,72 @@ static void LimineRefreshStatus(void)
 static void BuildBackupRestorePage(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right - 20, y = 10;
+    int w = rc.right - CONTENT_PADDING * 2;
+    int y = CONTENT_PADDING;
     
     // 标题
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"备份与恢复", WS_CHILD | WS_VISIBLE, 10, y, w, 28, hParent, NULL, NULL, NULL);
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"备份与恢复 / Backup & Restore", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 32, hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-    y += 40;
+    y += 50;
     
     // ===== MBR 备份恢复区域 =====
-    HWND hMbrTitle = CreateWindowExW(0, L"STATIC", L"MBR 备份与修复", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+    HWND hMbrTitle = CreateWindowExW(0, L"STATIC", L"MBR 备份与修复 / MBR Backup & Repair", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 24, hParent, NULL, NULL, NULL);
     SendMessageW(hMbrTitle, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    y += 28;
+    y += 35;
     
-    // MBR 按钮行
-    int bx = 10;
-    CreateWindowExW(0, L"BUTTON", L"备份 MBR", WS_CHILD | WS_VISIBLE, bx, y, 100, BTN_HEIGHT, hParent, (HMENU)ID_BTN_BACKUP_MBR, NULL, NULL);
-    SendMessageW(GetDlgItem(hParent, ID_BTN_BACKUP_MBR), WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    bx += 108;
-    
-    CreateWindowExW(0, L"BUTTON", L"恢复 MBR", WS_CHILD | WS_VISIBLE, bx, y, 100, BTN_HEIGHT, hParent, (HMENU)ID_BTN_RESTORE_MBR, NULL, NULL);
-    SendMessageW(GetDlgItem(hParent, ID_BTN_RESTORE_MBR), WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    bx += 108;
-    
-    CreateWindowExW(0, L"BUTTON", L"修复 Windows MBR", WS_CHILD | WS_VISIBLE, bx, y, 130, BTN_HEIGHT, hParent, (HMENU)ID_BTN_MBR_REPAIR, NULL, NULL);
-    SendMessageW(GetDlgItem(hParent, ID_BTN_MBR_REPAIR), WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    y += 45;
+    // MBR 按钮行 - 使用扁平按钮
+    int bx = CONTENT_PADDING;
+    int btnH = 36;
+    CreateFlatButton(hParent, bx, y, 130, btnH, L"备份 MBR / Backup", ID_BTN_BACKUP_MBR, FALSE); bx += 140;
+    CreateFlatButton(hParent, bx, y, 130, btnH, L"恢复 MBR / Restore", ID_BTN_RESTORE_MBR, FALSE); bx += 140;
+    CreateFlatButton(hParent, bx, y, 160, btnH, L"修复 Win MBR / Repair", ID_BTN_MBR_REPAIR, TRUE);
+    y += 50;
     
     // MBR 说明
     HWND hMbrNote = CreateWindowExW(0, L"STATIC",
-        L"说明：MBR（主引导记录）位于磁盘第一个扇区，包含引导代码和分区表。\n"
-        L"• 备份 MBR：保存完整的 MBR 到文件\n"
-        L"• 恢复 MBR：从备份文件恢复 MBR\n"
-        L"• 修复 Windows MBR：将 MBR 引导代码重置为 Windows 标准",
-        WS_CHILD | WS_VISIBLE, 10, y, w, 60, hParent, NULL, NULL, NULL);
+        L"MBR（主引导记录）位于磁盘第一个扇区 / Master Boot Record\n"
+        L"• 备份：保存完整 MBR / Save full MBR\n"
+        L"• 恢复：从备份恢复 / Restore from backup\n"
+        L"• 修复：重置为 Windows 标准 / Reset to Windows standard",
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 60, hParent, NULL, NULL, NULL);
     SendMessageW(hMbrNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
     y += 75;
     
     // ===== UEFI 修复区域 =====
     BOOL isUEFI = BootMode_IsUEFIFirmware();
     
-    HWND hUefiTitle = CreateWindowExW(0, L"STATIC", L"UEFI 引导修复", WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+    HWND hUefiTitle = CreateWindowExW(0, L"STATIC", L"UEFI 引导修复 / UEFI Boot Repair", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 22, hParent, NULL, NULL, NULL);
     SendMessageW(hUefiTitle, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
-    y += 28;
+    y += 30;
     
     if (!isUEFI) {
         // 非 UEFI 模式提示
         HWND hUefiNote = CreateWindowExW(0, L"STATIC",
-            L"⚠ 当前系统未运行在 UEFI 模式下，UEFI 修复功能不可用",
-            WS_CHILD | WS_VISIBLE, 10, y, w, 20, hParent, NULL, NULL, NULL);
+            L"⚠ 当前非 UEFI 模式，此功能不可用 / Not available in Legacy mode",
+            WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 22, hParent, NULL, NULL, NULL);
         SendMessageW(hUefiNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
-        y += 25;
+        y += 30;
     } else {
         // UEFI 修复按钮
-        bx = 10;
-        CreateWindowExW(0, L"BUTTON", L"修复 UEFI 引导", WS_CHILD | WS_VISIBLE, bx, y, 120, BTN_HEIGHT, hParent, (HMENU)ID_BTN_UEFI_REPAIR, NULL, NULL);
-        SendMessageW(GetDlgItem(hParent, ID_BTN_UEFI_REPAIR), WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+        CreateFlatButton(hParent, CONTENT_PADDING, y, 160, 36, L"修复 UEFI 引导 / Repair", ID_BTN_UEFI_REPAIR, TRUE);
         y += 45;
         
         // UEFI 说明
         HWND hUefiNote = CreateWindowExW(0, L"STATIC",
-            L"说明：修复 UEFI 引导可以解决以下问题：\n"
-            L"• Windows Boot Manager 丢失或损坏\n"
-            L"• ESP 分区引导文件缺失\n"
-            L"• NVRAM 启动项丢失",
-            WS_CHILD | WS_VISIBLE, 10, y, w, 60, hParent, NULL, NULL, NULL);
+            L"• 修复 Windows Boot Manager\n"
+            L"• 重建 ESP 引导文件 / Rebuild ESP boot files\n"
+            L"• 恢复 NVRAM 启动项 / Restore NVRAM entries",
+            WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 55, hParent, NULL, NULL, NULL);
         SendMessageW(hUefiNote, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
         y += 70;
     }
     
     // 状态栏
-    HWND hStatus = CreateWindowExW(0, L"STATIC", L"就绪", WS_CHILD | WS_VISIBLE, 10, rc.bottom - 30, w, 20, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
+    HWND hStatus = CreateWindowExW(0, L"STATIC", L"就绪 / Ready", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, rc.bottom - 25, w, 18, hParent, (HMENU)ID_STATUS_TEXT, NULL, NULL);
     SendMessageW(hStatus, WM_SETFONT, (WPARAM)g_fontSmall, TRUE);
 }
 
@@ -1850,18 +2328,32 @@ static void BuildBackupRestorePage(HWND hParent)
 static void BuildAboutPage(HWND hParent)
 {
     RECT rc; GetClientRect(hParent, &rc);
-    int w = rc.right - 32, y = 32;
+    int w = rc.right - CONTENT_PADDING * 2;
+    int y = CONTENT_PADDING;
     
-    HWND hTitle = CreateWindowExW(0, L"STATIC", L"关于", WS_CHILD | WS_VISIBLE, 32, y, w, 32, hParent, NULL, NULL, NULL);
+    HWND hTitle = CreateWindowExW(0, L"STATIC", L"关于 / About", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 28, hParent, NULL, NULL, NULL);
     SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
+    y += 45;
     
-    y += 50;
-    HWND hName = CreateWindowExW(0, L"STATIC", L"Boot Manager Pro v3.2.0", WS_CHILD | WS_VISIBLE, 32, y, w, 28, hParent, NULL, NULL, NULL);
+    HWND hName = CreateWindowExW(0, L"STATIC", L"Boot Manager Pro v1.0", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 28, hParent, NULL, NULL, NULL);
     SendMessageW(hName, WM_SETFONT, (WPARAM)g_fontTitle, TRUE);
-    
     y += 40;
-    HWND hDesc = CreateWindowExW(0, L"STATIC", L"UEFI/MBR 启动项管理工具", WS_CHILD | WS_VISIBLE, 32, y, w, 150, hParent, NULL, NULL, NULL);
+    
+    HWND hDesc = CreateWindowExW(0, L"STATIC", L"UEFI 引导管理工具 / UEFI Boot Manager", 
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 22, hParent, NULL, NULL, NULL);
     SendMessageW(hDesc, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+    y += 50;
+    
+    HWND hInfo = CreateWindowExW(0, L"STATIC", 
+        L"Features / 功能\n"
+        L"• UEFI 启动项管理 / Boot Entry Management\n"
+        L"• rEFInd / Limine 安装 / 3rd Party Bootloader\n"
+        L"• MBR 备份与恢复 / MBR Backup & Restore\n"
+        L"• UEFI 引导修复 / UEFI Boot Repair",
+        WS_CHILD | WS_VISIBLE, CONTENT_PADDING, y, w, 100, hParent, NULL, NULL, NULL);
+    SendMessageW(hInfo, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
 }
 
 static void RefreshBootList(void)
@@ -1963,6 +2455,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPWSTR lpCmdLine, int 
 {
     InitCommonControls();
     InitFonts();
+    RegisterFlatButtonClass();  // 注册扁平按钮类
     RegisterContentClass();  // 注册内容容器窗口类
     
     WNDCLASSEXW wc = {0};
@@ -1975,7 +2468,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPWSTR lpCmdLine, int 
     wc.lpszClassName = L"BootManagerProClass";
     RegisterClassExW(&wc);
     
-    g_hMainWnd = CreateWindowExW(0, L"BootManagerProClass", L"Boot Manager Pro v3.2.0",
+    g_hMainWnd = CreateWindowExW(0, L"BootManagerProClass", L"Boot Manager Pro v1.0",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, WINDOW_WIDTH, WINDOW_HEIGHT, NULL, NULL, hInst, NULL);
     
