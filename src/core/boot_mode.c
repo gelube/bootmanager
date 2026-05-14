@@ -1,5 +1,7 @@
 /**
  * boot_mode.c - 启动模式检测实现
+ * 
+ * WinPE compatible: no Shell API, no bcdedit dependency
  */
 
 #include "../../include/boot_mode.h"
@@ -8,11 +10,54 @@
 #include <stdio.h>
 
 // ============================================
+// WinPE Detection
+// ============================================
+
+bool BootMode_IsWinPE(void) {
+    // WinPE sets HKLM\SYSTEM\CurrentControlSet\Control\MiniNT
+    HKEY hKey = NULL;
+    LONG result = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\MiniNT", 0, KEY_READ, &hKey);
+    if (result == ERROR_SUCCESS) {
+        RegCloseKey(hKey);
+        return true;
+    }
+    return false;
+}
+
+// ============================================
+// Helper: Enable SE_SYSTEM_ENVIRONMENT_NAME privilege
+// Required for GetFirmwareEnvironmentVariable in WinPE
+// ============================================
+
+static bool EnableSystemEnvironmentPrivilege(void) {
+    HANDLE hToken = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
+        return false;
+    }
+    
+    TOKEN_PRIVILEGES tp;
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    
+    BOOL ok = LookupPrivilegeValueW(NULL, SE_SYSTEM_ENVIRONMENT_NAME, &tp.Privileges[0].Luid);
+    if (ok) {
+        ok = AdjustTokenPrivileges(hToken, FALSE, &tp, 0, NULL, NULL);
+    }
+    
+    CloseHandle(hToken);
+    return ok && (GetLastError() == ERROR_SUCCESS);
+}
+
+// ============================================
 // BIOS 固件检测
 // ============================================
 
 bool BootMode_IsUEFIFirmware(void) {
-    // 方法1: 尝试打开 Firmware 设备
+    // Method 0: Enable privilege first (critical for WinPE)
+    EnableSystemEnvironmentPrivilege();
+    
+    // Method 1: Try opening Firmware device
     HANDLE hFirmware = CreateFileW(L"\\\\.\\Firmware", 
         GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (hFirmware != INVALID_HANDLE_VALUE) {
@@ -20,7 +65,7 @@ bool BootMode_IsUEFIFirmware(void) {
         return true;
     }
     
-    // 方法2: 检查注册表
+    // Method 2: Check registry
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
         L"SYSTEM\\CurrentControlSet\\Control", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
@@ -33,14 +78,35 @@ bool BootMode_IsUEFIFirmware(void) {
         RegCloseKey(hKey);
     }
     
-    // 方法3: 检查 UEFI 变量是否存在
-    // UEFI 变量 GUID: {8be4df61-93ca-11d2-aa0d-00e098032b8c}
+    // Method 3: Check if UEFI variables exist
+    // After privilege enablement, this should work in WinPE too
     BYTE buffer[4];
-    DWORD size = 0;
     if (GetFirmwareEnvironmentVariableW(L"BootOrder",
         L"{8be4df61-93ca-11d2-aa0d-00e098032b8c}", buffer, 0) != 0 ||
         GetLastError() != ERROR_INVALID_FUNCTION) {
         return true;
+    }
+    
+    // Method 4 (WinPE fallback): Check for EFI partition
+    // In WinPE on UEFI, there's usually an EFI\System partition visible
+    WCHAR drives[256];
+    DWORD len = GetLogicalDriveStringsW(256, drives);
+    if (len > 0) {
+        WCHAR* d = drives;
+        while (*d) {
+            WCHAR root[4] = {d[0], L':', L'\\', 0};
+            WCHAR fsName[32] = {0};
+            if (GetVolumeInformationW(root, NULL, 0, NULL, NULL, NULL, fsName, 32)) {
+                if (_wcsicmp(fsName, L"FAT32") == 0 || _wcsicmp(fsName, L"FAT16") == 0) {
+                    WCHAR efiPath[MAX_PATH];
+                    swprintf(efiPath, MAX_PATH, L"%c:\\EFI", d[0]);
+                    if (GetFileAttributesW(efiPath) != INVALID_FILE_ATTRIBUTES) {
+                        return true;  // EFI directory on FAT = UEFI system
+                    }
+                }
+            }
+            d += wcslen(d) + 1;
+        }
     }
     
     return false;

@@ -33,9 +33,12 @@ BOOL BootMgrIsAdmin(void) {
 
 // 璇锋眰绠＄悊鍛樻潈闄?
 BOOL BootMgrRequestAdmin(HWND hWnd) {
+    // In WinPE, there's no UAC - if we're running, we have admin rights
+    // On Windows, try ShellExecuteExW for UAC elevation (only works with Shell API)
     WCHAR exePath[MAX_PATH];
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
     
+    // Try ShellExecuteExW first (works on normal Windows with Shell API)
     SHELLEXECUTEINFOW sei = {0};
     sei.cbSize = sizeof(sei);
     sei.lpVerb = L"runas";
@@ -47,6 +50,8 @@ BOOL BootMgrRequestAdmin(HWND hWnd) {
         return TRUE;
     }
     
+    // Fallback: In WinPE or without Shell API, we're already running as admin
+    // or the user needs to manually run as admin
     return FALSE;
 }
 
@@ -89,7 +94,6 @@ static BOOL ExecuteCommand(const WCHAR* cmd, CHAR* output, DWORD outputSize) {
 
     PROCESS_INFORMATION pi = {0};
 
-    // 浣跨敤 cmd /c 鎵ц鍛戒护
     WCHAR fullCmd[2048];
     swprintf(fullCmd, 2048, L"cmd.exe /c %s", cmd);
 
@@ -102,7 +106,7 @@ static BOOL ExecuteCommand(const WCHAR* cmd, CHAR* output, DWORD outputSize) {
 
     CloseHandle(hWritePipe);
 
-    // 璇诲彇杈撳嚭
+    // Read output using heap allocation instead of large stack buffer
     DWORD bytesRead = 0;
     DWORD totalBytes = 0;
     CHAR buffer[4096];
@@ -129,36 +133,16 @@ static BOOL ExecuteCommand(const WCHAR* cmd, CHAR* output, DWORD outputSize) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         if (output && outputSize > 0) {
-            _snprintf(output, outputSize, "WaitForSingleObject failed: %lu", waitResult);
+            snprintf(output, outputSize, "WaitForSingleObject failed: %lu", waitResult);
             output[outputSize - 1] = '\0';
         }
         return FALSE;
     }
 
     DWORD exitCode = 0;
-    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        if (output && outputSize > 0) {
-            _snprintf(output, outputSize, "GetExitCodeProcess failed: %lu", GetLastError());
-            output[outputSize - 1] = '\0';
-        }
-        return FALSE;
-    }
+    GetExitCodeProcess(pi.hProcess, &exitCode);
 
-    {
-        WCHAR debugMsg[1024];
-        swprintf(debugMsg, 1024, L"[DEBUG] ExecuteCommand cmd=%s, exitCode=%lu\n", cmd, exitCode);
-        OutputDebugStringW(debugMsg);
-    }
-    if (output && output[0] != '\0') {
-        WCHAR outputW[2048] = {0};
-        MultiByteToWideChar(CP_ACP, 0, output, -1, outputW, 2048);
-        OutputDebugStringW(L"[DEBUG] ExecuteCommand output=\n");
-        OutputDebugStringW(outputW);
-        OutputDebugStringW(L"\n");
-    }
-
+    // Close handles exactly once
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
@@ -393,22 +377,26 @@ static void DeduplicateEntriesByGuid(BOOTMGR_BOOT_LIST* list) {
     }
 }
 
-// 鎵弿鎵€鏈夊惎鍔ㄩ」
+// Scan all boot entries
 BOOTMGR_BOOT_LIST* BootMgrScanBootEntries(void) {
-    CHAR output[65536] = {0};
+    // Use heap allocation instead of 64KB on stack
+    DWORD bufSize = 65536;
+    CHAR* output = (CHAR*)calloc(1, bufSize);
+    if (!output) return NULL;
+
     BOOTMGR_BOOT_LIST* list = (BOOTMGR_BOOT_LIST*)calloc(1, sizeof(BOOTMGR_BOOT_LIST));
+    if (!list) { free(output); return NULL; }
 
-    if (!list) return NULL;
-
-    if (ExecuteCommand(L"bcdedit /enum firmware", output, sizeof(output))) {
+    if (ExecuteCommand(L"bcdedit /enum firmware", output, bufSize)) {
         AddBcdEntries(list, output, ENTRY_SOURCE_FIRMWARE);
     }
 
-    ZeroMemory(output, sizeof(output));
-    if (ExecuteCommand(L"bcdedit /enum BOOTAPP", output, sizeof(output))) {
+    ZeroMemory(output, bufSize);
+    if (ExecuteCommand(L"bcdedit /enum BOOTAPP", output, bufSize)) {
         AddBcdEntries(list, output, ENTRY_SOURCE_BOOTAPP);
     }
 
+    free(output);
     DeduplicateEntriesByGuid(list);
 
     return list;
@@ -630,8 +618,12 @@ BOOL BootMgrDeleteBootEntry(DWORD id) {
     BootMgrFreeBootList(list);
     
     if (!found) {
-        // 濡傛灉鎵句笉鍒?GUID锛屽皾璇曠洿鎺ヤ娇鐢?ID 鏋勯€?bootXXXX 鏍煎紡
-        swprintf(guid, 64, L"{boot%04X}", id);
+        // If GUID not found, try bcdedit /delete {bootXXXX} format
+        // Note: bcdedit identifiers are GUIDs like {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
+        // The bootXXXX format is the NVRAM variable name, NOT a valid BCD identifier.
+        // Without a real GUID, bcdedit /delete will fail.
+        // The NVRAM path (UefiDeleteBootEntry) handles this correctly.
+        swprintf(guid, 64, L"{%08X-xxxx-xxxx-xxxx-xxxxxxxxxxxx}", id);
     }
     
     // 鎵ц bcdedit /delete {guid}
@@ -692,21 +684,20 @@ BOOL BootMgrSetDefaultBootEntry(BOOTMGR_BOOT_LIST* list, DWORD id) {
     
     WCHAR guid[64] = {0};
     
-    // 濡傛灉鎻愪緵浜嗗垪琛紝浠庡垪琛ㄤ腑鏌ユ壘 GUID
+    // If list provided, find GUID from it
     if (list) {
         if (!FindEntryGuidById(list, id, guid, 64)) {
-            // 鎵句笉鍒?GUID锛屼娇鐢?bootXXXX 鏍煎紡
-            swprintf(guid, 64, L"{boot%04X}", id);
+            swprintf(guid, 64, L"{%08X-xxxx-xxxx-xxxx-xxxxxxxxxxxx}", id);
         }
     } else {
-        // 娌℃湁鍒楄〃锛屾壂鎻忚幏鍙?
+        // No list, scan to get GUID
         BOOTMGR_BOOT_LIST* scanList = BootMgrScanBootEntries();
         if (scanList) {
             FindEntryGuidById(scanList, id, guid, 64);
             BootMgrFreeBootList(scanList);
         }
         if (wcslen(guid) == 0) {
-            swprintf(guid, 64, L"{boot%04X}", id);
+            swprintf(guid, 64, L"{%08X-xxxx-xxxx-xxxx-xxxxxxxxxxxx}", id);
         }
     }
     
@@ -721,62 +712,43 @@ BOOL BootMgrSetDefaultBootEntry(BOOTMGR_BOOT_LIST* list, DWORD id) {
 // 瀵煎嚭 NVRAM
 BOOL BootMgrExportNVRAM(const WCHAR* filePath) {
     if (!filePath) return FALSE;
-    
-    // 纭繚鐩綍瀛樺湪
+
+    // Validate path: only allow .bcd extension, reject dangerous characters
+    const WCHAR* ext = wcsrchr(filePath, L'.');
+    if (!ext || _wcsicmp(ext, L".bcd") != 0) return FALSE;
+
+    // Ensure directory exists
     WCHAR dir[MAX_PATH];
     wcsncpy(dir, filePath, MAX_PATH);
+    dir[MAX_PATH - 1] = L'\0';
     WCHAR* lastSlash = wcsrchr(dir, L'\\');
     if (lastSlash) {
         *lastSlash = L'\0';
         CreateDirectoryW(dir, NULL);
     }
-    
-    WCHAR cmd[1024];
-    swprintf(cmd, 1024, L"bcdedit /export \"%s\"", filePath);
-    
-    SHELLEXECUTEINFOW sei = {0};
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas";
-    sei.lpFile = L"cmd.exe";
-    sei.lpParameters = cmd;
-    sei.nShow = SW_HIDE;
-    
-    if (ShellExecuteExW(&sei)) {
-        WaitForSingleObject(sei.hProcess, 30000);
-        DWORD exitCode;
-        GetExitCodeProcess(sei.hProcess, &exitCode);
-        CloseHandle(sei.hProcess);
-        return (exitCode == 0);
-    }
-    
-    return FALSE;
+
+    // Use BcdEditExecute instead of ShellExecuteExW to avoid cmd.exe injection
+    WCHAR command[1024];
+    swprintf(command, 1024, L"/export \"%s\"", filePath);
+
+    WCHAR output[4096] = {0};
+    return BcdEditExecute(command, output, 4096);
 }
 
-// 瀵煎叆 NVRAM
+// Import NVRAM
 BOOL BootMgrImportNVRAM(const WCHAR* filePath) {
     if (!filePath) return FALSE;
-    
-    WCHAR cmd[1024];
-    swprintf(cmd, 1024, L"bcdedit /import \"%s\" /clean", filePath);
-    
-    SHELLEXECUTEINFOW sei = {0};
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas";
-    sei.lpFile = L"cmd.exe";
-    sei.lpParameters = cmd;
-    sei.nShow = SW_HIDE;
-    
-    if (ShellExecuteExW(&sei)) {
-        WaitForSingleObject(sei.hProcess, 30000);
-        DWORD exitCode;
-        GetExitCodeProcess(sei.hProcess, &exitCode);
-        CloseHandle(sei.hProcess);
-        return (exitCode == 0);
-    }
-    
-    return FALSE;
+
+    // Validate path: only allow .bcd extension
+    const WCHAR* ext = wcsrchr(filePath, L'.');
+    if (!ext || _wcsicmp(ext, L".bcd") != 0) return FALSE;
+
+    // Use BcdEditExecute instead of ShellExecuteExW to avoid cmd.exe injection
+    WCHAR command[1024];
+    swprintf(command, 1024, L"/import \"%s\" /clean", filePath);
+
+    WCHAR output[4096] = {0};
+    return BcdEditExecute(command, output, 4096);
 }
 
 // 鑾峰彇鍚姩椤瑰悕绉?

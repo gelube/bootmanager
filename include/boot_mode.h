@@ -66,4 +66,10 @@ int BootMode_FindActivePartition(int diskNumber);
  */
 bool BootMode_FindESP(WCHAR* driveLetter);
 
+/**
+ * Check if running in WinPE environment
+ * WinPE has HKLM\SYSTEM\CurrentControlSet\Control\MiniNT key
+ */
+bool BootMode_IsWinPE(void);
+
 #endif // BOOT_MODE_H

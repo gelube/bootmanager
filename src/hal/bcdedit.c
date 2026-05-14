@@ -4,6 +4,33 @@
 #include <string.h>
 #include <wchar.h>
 
+/**
+ * Sanitize a wide string for safe inclusion in bcdedit command arguments.
+ * Removes characters that could be used for command injection: quotes,
+ * ampersands, pipes, semicolons, backticks, parentheses, newlines, etc.
+ * Returns the length of the sanitized string.
+ */
+static DWORD SanitizeArg(const WCHAR* input, WCHAR* output, DWORD outputSize) {
+    if (!input || !output || outputSize == 0) return 0;
+
+    /* Characters that are dangerous in cmd.exe command lines */
+    static const WCHAR kDangerous[] = L"\"&|;<>()`$\n\r";
+
+    DWORD i = 0, j = 0;
+    while (input[i] && j < outputSize - 1) {
+        BOOL safe = TRUE;
+        for (int d = 0; kDangerous[d]; d++) {
+            if (input[i] == kDangerous[d]) { safe = FALSE; break; }
+        }
+        if (safe) {
+            output[j++] = input[i];
+        }
+        i++;
+    }
+    output[j] = L'\0';
+    return j;
+}
+
 static BOOL ExtractGuid(const CHAR* text, WCHAR* guid, DWORD guidSize) {
     const CHAR* start;
     const CHAR* end;
@@ -44,6 +71,32 @@ BOOL BcdEditExecute(const WCHAR* command, WCHAR* output, DWORD outputSize) {
     DWORD total = 0;
 
     if (!command) {
+        return FALSE;
+    }
+
+    // Check if bcdedit.exe is available (may not exist in WinPE)
+    static BOOL s_bcdeditChecked = FALSE;
+    static BOOL s_bcdeditAvailable = FALSE;
+    if (!s_bcdeditChecked) {
+        s_bcdeditChecked = TRUE;
+        // Try to find bcdedit.exe in PATH or alongside our EXE
+        WCHAR exeDir[MAX_PATH];
+        GetModuleFileNameW(NULL, exeDir, MAX_PATH);
+        WCHAR* slash = wcsrchr(exeDir, L'\\');
+        if (slash) {
+            wcscpy(slash + 1, L"bcdedit.exe");
+            s_bcdeditAvailable = (GetFileAttributesW(exeDir) != INVALID_FILE_ATTRIBUTES);
+        }
+        if (!s_bcdeditAvailable) {
+            // Check PATH
+            WCHAR path[MAX_PATH];
+            if (SearchPathW(NULL, L"bcdedit.exe", NULL, MAX_PATH, path, NULL)) {
+                s_bcdeditAvailable = TRUE;
+            }
+        }
+    }
+    if (!s_bcdeditAvailable) {
+        if (output) output[0] = 0;
         return FALSE;
     }
 
@@ -108,12 +161,17 @@ BOOL BcdEditCreate(const WCHAR* description, const WCHAR* application, WCHAR* gu
     WCHAR command[1024];
     WCHAR output[4096];
     CHAR outputA[4096];
+    WCHAR safeDesc[256] = {0};
+    WCHAR safeApp[64] = {0};
 
     if (!description || !application || !guid || guidSize == 0) {
         return FALSE;
     }
 
-    swprintf(command, 1024, L"/create /d \"%s\" /application %s", description, application);
+    SanitizeArg(description, safeDesc, 256);
+    SanitizeArg(application, safeApp, 64);
+
+    swprintf(command, 1024, L"/create /d \"%s\" /application %s", safeDesc, safeApp);
     if (!BcdEditExecute(command, output, 4096)) {
         return FALSE;
     }
@@ -127,23 +185,33 @@ BOOL BcdEditCreate(const WCHAR* description, const WCHAR* application, WCHAR* gu
 
 BOOL BcdEditSet(const WCHAR* guid, const WCHAR* property, const WCHAR* value) {
     WCHAR command[1024];
+    WCHAR safeGuid[64] = {0};
+    WCHAR safeProp[64] = {0};
+    WCHAR safeVal[512] = {0};
 
     if (!guid || !property || !value) {
         return FALSE;
     }
 
-    swprintf(command, 1024, L"/set %s %s %s", guid, property, value);
+    SanitizeArg(guid, safeGuid, 64);
+    SanitizeArg(property, safeProp, 64);
+    SanitizeArg(value, safeVal, 512);
+
+    swprintf(command, 1024, L"/set %s %s %s", safeGuid, safeProp, safeVal);
     return BcdEditExecute(command, NULL, 0);
 }
 
 BOOL BcdEditDelete(const WCHAR* guid) {
     WCHAR command[512];
+    WCHAR safeGuid[64] = {0};
 
     if (!guid) {
         return FALSE;
     }
 
-    swprintf(command, 512, L"/delete %s", guid);
+    SanitizeArg(guid, safeGuid, 64);
+
+    swprintf(command, 512, L"/delete %s", safeGuid);
     return BcdEditExecute(command, NULL, 0);
 }
 

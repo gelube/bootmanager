@@ -34,9 +34,10 @@ static BOOL RunMountvol(const WCHAR* command) {
 }
 
 /**
- * 检查驱动器是否是 ESP（FAT32 + EFI 目录）
- * @param driveLetter 盘符
- * @param excludeRemovable 是否排除可移动介质（U盘）
+ * Check if a drive is an ESP partition.
+ * Accepts FAT12, FAT16, FAT32 file systems.
+ * Does NOT require an \EFI directory to exist (fresh ESP may be empty).
+ * Does NOT exclude removable media (USB ESP is valid).
  */
 static BOOL IsEspDriveEx(WCHAR driveLetter, BOOL excludeRemovable) {
     WCHAR root[4] = {driveLetter, L':', L'\\', 0};
@@ -45,27 +46,25 @@ static BOOL IsEspDriveEx(WCHAR driveLetter, BOOL excludeRemovable) {
     UINT driveType = GetDriveTypeW(root);
     
     if (driveType == DRIVE_NO_ROOT_DIR) return FALSE;
+    if (driveType == DRIVE_CDROM) return FALSE;  // Skip CD/DVD only
     
-    // 排除可移动介质（U盘、光驱等）
+    // Exclude removable only if explicitly requested
     if (excludeRemovable && driveType == DRIVE_REMOVABLE) return FALSE;
     
-    // 只接受固定磁盘或 RAM 磁盘
-    if (driveType != DRIVE_FIXED && driveType != DRIVE_RAMDISK) return FALSE;
-    
     if (GetVolumeInformationW(root, NULL, 0, NULL, NULL, NULL, fsName, 32)) {
-        if (_wcsicmp(fsName, L"FAT32") == 0 || _wcsicmp(fsName, L"FAT") == 0) {
-            WCHAR efiDir[16];
-            swprintf(efiDir, 16, L"%c:\\EFI", driveLetter);
-            if (GetFileAttributesW(efiDir) != INVALID_FILE_ATTRIBUTES) {
-                return TRUE;
-            }
+        // Accept FAT12, FAT16, FAT32, and generic "FAT" — all valid for ESP
+        if (_wcsicmp(fsName, L"FAT32") == 0 ||
+            _wcsicmp(fsName, L"FAT16") == 0 ||
+            _wcsicmp(fsName, L"FAT12") == 0 ||
+            _wcsicmp(fsName, L"FAT") == 0) {
+            return TRUE;
         }
     }
     return FALSE;
 }
 
 static BOOL IsEspDrive(WCHAR driveLetter) {
-    return IsEspDriveEx(driveLetter, TRUE);  // 默认排除可移动介质
+    return IsEspDriveEx(driveLetter, FALSE);  // Allow removable ESP (USB)
 }
 
 BOOL EspMountEx(WCHAR* driveLetter, DWORD size, BOOL* mountedByUs) {
@@ -75,14 +74,15 @@ BOOL EspMountEx(WCHAR* driveLetter, DWORD size, BOOL* mountedByUs) {
         return FALSE;
     }
 
-    // 初始化输出参数
+    // Initialize output
     if (mountedByUs) *mountedByUs = FALSE;
 
-    // 先检查 ESP 是否已经挂载
-    for (WCHAR d = L'C'; d <= L'Z'; ++d) {
+    // First check if ESP is already mounted
+    // In WinPE, ESP is often already mounted at a drive letter (e.g., C: or D:)
+    for (WCHAR d = L'A'; d <= L'Z'; ++d) {
         if (IsEspDrive(d)) {
             swprintf(driveLetter, size, L"%c:", d);
-            // 检查是否是我们之前挂载的
+            // Check if we mounted it before
             if (mountedByUs) {
                 *mountedByUs = (s_mountedByUs == d);
             }
@@ -90,7 +90,9 @@ BOOL EspMountEx(WCHAR* driveLetter, DWORD size, BOOL* mountedByUs) {
         }
     }
 
-    // 没有已挂载的 ESP，找一个空闲盘符
+    // No mounted ESP found. Try mountvol to mount it.
+    // In WinPE, mountvol /S may not work; try diskpart or manual GUID mount
+    // Find a free drive letter (start from Z going down)
     for (WCHAR d = L'Z'; d >= L'C'; --d) {
         WCHAR root[4] = {d, L':', L'\\', 0};
         if (GetDriveTypeW(root) == DRIVE_NO_ROOT_DIR) {
@@ -106,18 +108,18 @@ BOOL EspMountEx(WCHAR* driveLetter, DWORD size, BOOL* mountedByUs) {
     WCHAR command[16];
     swprintf(command, 16, L"%c: /S", letter);
 
-    // 尝试挂载
+    // Try mounting
     if (!RunMountvol(command)) {
         return FALSE;
     }
 
     Sleep(300);
 
-    // 验证挂载是否成功
+    // Verify mount succeeded
     WCHAR root[4] = {letter, L':', L'\\', 0};
     if (GetFileAttributesW(root) != INVALID_FILE_ATTRIBUTES) {
         swprintf(driveLetter, size, L"%c:", letter);
-        s_mountedByUs = letter;  // 记录我们挂载的盘符
+        s_mountedByUs = letter;
         if (mountedByUs) *mountedByUs = TRUE;
         return TRUE;
     }

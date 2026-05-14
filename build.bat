@@ -20,9 +20,16 @@ if %errorlevel% neq 0 (
 echo [INFO] Compiling Boot Manager Pro v3...
 echo.
 
-:: Compile
-gcc -municode src\ui\main.c src\ui\dialog.c src\ui\pages\*.c src\ui\dialogs\*.c ^
-    src\core\*.c src\hal\*.c src\utils\*.c ^
+:: Compile - explicit source files (no wildcard to avoid missing file errors)
+gcc -municode ^
+    src\ui\main.c src\ui\dialog.c ^
+    src\ui\dialogs\add_efi_dialog.c ^
+    src\core\boot.c src\core\boot_mode.c src\core\esp.c ^
+    src\core\limine.c src\core\mbr_manager.c ^
+    src\core\refind.c src\core\uefi.c src\core\uefi_nvram.c ^
+    src\core\backup.c ^
+    src\hal\bcdedit.c ^
+    src\utils\error.c src\utils\logger.c ^
     -I include -I src ^
     -o dist\BootManagerPro.exe ^
     -m64 -mwindows -lcomctl32 -lcomdlg32 -lshell32 -ladvapi32 -lole32 -luuid -O2 -Wall

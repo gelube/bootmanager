@@ -133,7 +133,7 @@ BOOL BackupMBR(const WCHAR* drive, const WCHAR* outputPath) {
 // Restore MBR
 BOOL RestoreMBR(const WCHAR* drive, const WCHAR* backupPath) {
     HANDLE hDrive, hFile;
-    BYTE mbr[512];
+    BYTE backupMbr[512], currentMbr[512];
     DWORD bytesRead, bytesWritten;
     BOOL result = FALSE;
     
@@ -147,7 +147,7 @@ BOOL RestoreMBR(const WCHAR* drive, const WCHAR* backupPath) {
         return FALSE;
     }
     
-    if (!ReadFile(hFile, mbr, 512, &bytesRead, NULL) || bytesRead != 512) {
+    if (!ReadFile(hFile, backupMbr, 512, &bytesRead, NULL) || bytesRead != 512) {
         CloseHandle(hFile);
         return FALSE;
     }
@@ -165,8 +165,20 @@ BOOL RestoreMBR(const WCHAR* drive, const WCHAR* backupPath) {
         return FALSE;
     }
     
-    // Write MBR (preserve partition table if needed)
-    if (WriteFile(hDrive, mbr, 512, &bytesWritten, NULL) && bytesWritten == 512) {
+    // Read current MBR to preserve partition table
+    if (!ReadFile(hDrive, currentMbr, 512, &bytesRead, NULL) || bytesRead != 512) {
+        CloseHandle(hDrive);
+        return FALSE;
+    }
+    
+    // Preserve current partition table (bytes 0x1BE-0x1FD) and disk signature
+    // Only restore boot code (bytes 0x000-0x1BD) and boot signature (0x1FE-0x1FF)
+    memcpy(backupMbr + 0x1BE, currentMbr + 0x1BE, 64);   // Partition table
+    memcpy(backupMbr + 0x1B8, currentMbr + 0x1B8, 6);     // Disk signature + reserved
+    
+    // Write MBR with preserved partition table
+    SetFilePointer(hDrive, 0, NULL, FILE_BEGIN);
+    if (WriteFile(hDrive, backupMbr, 512, &bytesWritten, NULL) && bytesWritten == 512) {
         result = TRUE;
     }
     
@@ -180,24 +192,20 @@ BOOL BackupBCD(const WCHAR* outputPath) {
     
     if (!outputPath) return FALSE;
     
-    swprintf(cmd, 1024, L"/c bcdedit /export \"%s\"", outputPath);
+    swprintf(cmd, 1024, L"cmd.exe /c bcdedit /export \"%s\"", outputPath);
     
-    SHELLEXECUTEINFOW sei = {0};
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas";
-    sei.lpFile = L"cmd.exe";
-    sei.lpParameters = cmd;
-    sei.nShow = SW_HIDE;
+    STARTUPINFOW si = {0}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {0};
     
-    if (ShellExecuteExW(&sei)) {
-        WaitForSingleObject(sei.hProcess, INFINITE);
+    if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 60000);
         DWORD exitCode;
-        GetExitCodeProcess(sei.hProcess, &exitCode);
-        CloseHandle(sei.hProcess);
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
         
         if (exitCode == 0) {
-            // 清理 bcdedit 产生的日志文件 (.LOG, .LOG1, .LOG2)
+            // Clean up bcdedit log files (.LOG, .LOG1, .LOG2)
             WCHAR logPath[MAX_PATH];
             for (int i = 0; i <= 2; i++) {
                 if (i == 0) {
@@ -220,21 +228,17 @@ BOOL RestoreBCD(const WCHAR* backupPath) {
     
     if (!backupPath) return FALSE;
     
-    swprintf(cmd, 1024, L"/c bcdedit /import \"%s\" /clean", backupPath);
+    swprintf(cmd, 1024, L"cmd.exe /c bcdedit /import \"%s\" /clean", backupPath);
     
-    SHELLEXECUTEINFOW sei = {0};
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas";
-    sei.lpFile = L"cmd.exe";
-    sei.lpParameters = cmd;
-    sei.nShow = SW_HIDE;
+    STARTUPINFOW si = {0}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {0};
     
-    if (ShellExecuteExW(&sei)) {
-        WaitForSingleObject(sei.hProcess, INFINITE);
+    if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 60000);
         DWORD exitCode;
-        GetExitCodeProcess(sei.hProcess, &exitCode);
-        CloseHandle(sei.hProcess);
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
         return (exitCode == 0);
     }
     
@@ -337,23 +341,26 @@ BOOL RestoreAll(const WCHAR* backupDir, BACKUP_TYPE types) {
 }
 
 static BOOL RunElevatedCommand(const WCHAR* parameters) {
-    SHELLEXECUTEINFOW sei = {0};
+    // Use CreateProcessW for WinPE compatibility (ShellExecuteExW unavailable in WinPE)
+    STARTUPINFOW si = {0};
+    PROCESS_INFORMATION pi = {0};
     DWORD exitCode = 1;
 
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas";
-    sei.lpFile = L"cmd.exe";
-    sei.lpParameters = parameters;
-    sei.nShow = SW_HIDE;
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
 
-    if (!ShellExecuteExW(&sei)) {
+    WCHAR cmdLine[1024];
+    swprintf(cmdLine, 1024, L"cmd.exe %s", parameters);
+
+    if (!CreateProcessW(NULL, cmdLine, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         return FALSE;
     }
 
-    WaitForSingleObject(sei.hProcess, INFINITE);
-    GetExitCodeProcess(sei.hProcess, &exitCode);
-    CloseHandle(sei.hProcess);
+    WaitForSingleObject(pi.hProcess, 60000);
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
     return exitCode == 0;
 }
 

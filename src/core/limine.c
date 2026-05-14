@@ -737,7 +737,10 @@ BOOL LimineInstallToMBR(DWORD diskIndex, const WCHAR* limineSource)
     swprintf(srcFile, MAX_PATH, L"%s\\limine-bios.sys", limineSource);
     swprintf(destFile, MAX_PATH, L"%s\\limine-bios.sys", limineDir);
     if (GetFileAttributesW(srcFile) != INVALID_FILE_ATTRIBUTES) {
-        CopyFileW(srcFile, destFile, FALSE);
+        if (!CopyFileW(srcFile, destFile, FALSE)) {
+            SetError(L"复制 limine-bios.sys 失败");
+            return FALSE;
+        }
     }
     
     // 创建默认配置文件
@@ -797,7 +800,10 @@ BOOL LimineInstallToUEFI(const WCHAR* espDrive, const WCHAR* limineSource)
     swprintf(srcFile, MAX_PATH, L"%s\\BOOTX64.EFI", srcEfiDir);
     swprintf(destFile, MAX_PATH, L"%s\\BOOTX64.EFI", limineDir);
     if (GetFileAttributesW(srcFile) != INVALID_FILE_ATTRIBUTES) {
-        CopyFileW(srcFile, destFile, FALSE);
+        if (!CopyFileW(srcFile, destFile, FALSE)) {
+            SetError(L"复制 BOOTX64.EFI 失败");
+            return FALSE;
+        }
     }
     
     // 创建配置文件 (自动扫描系统)

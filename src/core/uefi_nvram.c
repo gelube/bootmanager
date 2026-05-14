@@ -12,11 +12,18 @@
 #pragma comment(lib, "advapi32.lib")
 
 // Dynamically resolve the Ex variants (available Win8+/WinPE; fall back to non-Ex on older)
+// IMPORTANT: Ex and non-Ex variants have DIFFERENT signatures. The non-Ex versions
+// lack the PDWORD attributes parameter. We must use separate function pointer types.
+
 typedef DWORD (WINAPI *PFN_GetFirmwareEnvEx)(LPCWSTR, LPCWSTR, PVOID, DWORD, PDWORD);
 typedef BOOL  (WINAPI *PFN_SetFirmwareEnvEx)(LPCWSTR, LPCWSTR, PVOID, DWORD, DWORD);
+typedef DWORD (WINAPI *PFN_GetFirmwareEnv)(LPCWSTR, LPCWSTR, PVOID, DWORD);
+typedef BOOL  (WINAPI *PFN_SetFirmwareEnv)(LPCWSTR, LPCWSTR, PVOID, DWORD);
 
 static PFN_GetFirmwareEnvEx s_getFwEx = NULL;
 static PFN_SetFirmwareEnvEx s_setFwEx = NULL;
+static PFN_GetFirmwareEnv   s_getFw = NULL;
+static PFN_SetFirmwareEnv   s_setFw = NULL;
 
 static void LoadFirmwareAPIs(void) {
     if (s_getFwEx) return;
@@ -24,11 +31,11 @@ static void LoadFirmwareAPIs(void) {
     if (!hKernel) return;
     s_getFwEx = (PFN_GetFirmwareEnvEx)GetProcAddress(hKernel, "GetFirmwareEnvironmentVariableExW");
     s_setFwEx = (PFN_SetFirmwareEnvEx)GetProcAddress(hKernel, "SetFirmwareEnvironmentVariableExW");
-    // Fall back to non-Ex variants if Ex not available
+    // Fall back to non-Ex variants if Ex not available (correct types, no PDWORD param)
     if (!s_getFwEx)
-        s_getFwEx = (PFN_GetFirmwareEnvEx)GetProcAddress(hKernel, "GetFirmwareEnvironmentVariableW");
+        s_getFw = (PFN_GetFirmwareEnv)GetProcAddress(hKernel, "GetFirmwareEnvironmentVariableW");
     if (!s_setFwEx)
-        s_setFwEx = (PFN_SetFirmwareEnvEx)GetProcAddress(hKernel, "SetFirmwareEnvironmentVariableW");
+        s_setFw = (PFN_SetFirmwareEnv)GetProcAddress(hKernel, "SetFirmwareEnvironmentVariableW");
 }
 
 // ---------------------------------------------------------------------------
@@ -66,40 +73,59 @@ BOOL UefiNvramAcquirePrivilege(void) {
 
 static DWORD NvramRead(LPCWSTR name, BYTE* buf, DWORD bufSize, DWORD* attribs) {
     LoadFirmwareAPIs();
-    if (!s_getFwEx) { SetLastError(ERROR_NOT_SUPPORTED); return 0; }
-    DWORD attr = 0;
-    DWORD ret = s_getFwEx(name, EFI_GLOBAL_VARIABLE_GUID, buf, bufSize, &attr);
-    if (attribs) *attribs = attr;
-    return ret;
+    if (s_getFwEx) {
+        DWORD attr = 0;
+        DWORD ret = s_getFwEx(name, EFI_GLOBAL_VARIABLE_GUID, buf, bufSize, &attr);
+        if (attribs) *attribs = attr;
+        return ret;
+    }
+    if (s_getFw) {
+        // Non-Ex variant: no attributes output parameter
+        if (attribs) *attribs = 0;
+        return s_getFw(name, EFI_GLOBAL_VARIABLE_GUID, buf, bufSize);
+    }
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return 0;
 }
 
 static BOOL NvramWrite(LPCWSTR name, const BYTE* data, DWORD size, DWORD attribs) {
     LoadFirmwareAPIs();
-    if (!s_setFwEx) { SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
-    return s_setFwEx(name, EFI_GLOBAL_VARIABLE_GUID, (PVOID)data, size, attribs);
+    if (s_setFwEx) {
+        return s_setFwEx(name, EFI_GLOBAL_VARIABLE_GUID, (PVOID)data, size, attribs);
+    }
+    if (s_setFw) {
+        // Non-Ex variant: no attributes parameter, use default NV|BS|RT
+        return s_setFw(name, EFI_GLOBAL_VARIABLE_GUID, (PVOID)data, size);
+    }
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
 }
 
 static BOOL NvramDelete(LPCWSTR name) {
     LoadFirmwareAPIs();
-    if (!s_setFwEx) { SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
-    
-    // 先读取变量的属性
-    BYTE buf[1];
-    DWORD attr = 0;
-    s_getFwEx(name, EFI_GLOBAL_VARIABLE_GUID, buf, 0, &attr);
-    
-    // 如果读取到了属性，使用该属性删除；否则使用 7 (NV|BS|RT)
-    if (attr == 0) attr = 7;
-    
-    // 删除变量：数据为 NULL，大小为 0
-    BOOL result = s_setFwEx(name, EFI_GLOBAL_VARIABLE_GUID, NULL, 0, 0);
-    
-    // 如果失败，尝试用属性值删除
-    if (!result) {
-        result = s_setFwEx(name, EFI_GLOBAL_VARIABLE_GUID, NULL, 0, attr);
+
+    if (s_setFwEx && s_getFwEx) {
+        // Ex path: read attributes first, then delete with correct attributes
+        BYTE buf[1];
+        DWORD attr = 0;
+        s_getFwEx(name, EFI_GLOBAL_VARIABLE_GUID, buf, 0, &attr);
+
+        if (attr == 0) attr = 7;
+
+        BOOL result = s_setFwEx(name, EFI_GLOBAL_VARIABLE_GUID, NULL, 0, 0);
+        if (!result) {
+            result = s_setFwEx(name, EFI_GLOBAL_VARIABLE_GUID, NULL, 0, attr);
+        }
+        return result;
     }
-    
-    return result;
+
+    if (s_setFw) {
+        // Non-Ex path: no attributes parameter
+        return s_setFw(name, EFI_GLOBAL_VARIABLE_GUID, NULL, 0);
+    }
+
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
 }
 
 // ---------------------------------------------------------------------------

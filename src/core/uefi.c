@@ -33,6 +33,7 @@ BOOL UefiRequestAdmin(HWND hWnd) {
     WCHAR exePath[MAX_PATH];
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
     
+    // Try ShellExecuteExW for UAC (works on Windows, fails gracefully on WinPE)
     SHELLEXECUTEINFOW sei = {0};
     sei.cbSize = sizeof(sei);
     sei.lpVerb = L"runas";
@@ -44,6 +45,7 @@ BOOL UefiRequestAdmin(HWND hWnd) {
         return TRUE;
     }
     
+    // WinPE fallback: no UAC, must be run as admin manually
     return FALSE;
 }
 
@@ -464,10 +466,10 @@ BOOL UefiDeleteBootEntry(DWORD id) {
     
     // 删除 BootXXXX 变量
     if (UefiNvramDeleteBootEntry(bootNum)) {
-        // 删除成功，success 保持不变
+        success = TRUE;  // NVRAM deletion succeeded
     } else {
-        // 删除失败，但只要从 BootOrder 移除了也算成功
-        // 变量残留会在下次添加时被复用
+        // Variable deletion failed, but if we removed from BootOrder that's still OK
+        // Variable residue will be reused on next add
     }
     
     // 删除 ESP 上的 EFI 目录
