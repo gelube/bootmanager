@@ -568,7 +568,7 @@ static void ShowPage(int page) {
     {
         static HFONT hTitle = NULL;
         if (!hTitle)
-            hTitle = CreateFontW(-19, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+            hTitle = CreateFontW(-17, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
         HWND hLabel = CreateWindowExW(0, L"STATIC",

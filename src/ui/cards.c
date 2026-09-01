@@ -18,7 +18,7 @@ static const COLORREF ACCENT_HOVER   = RGB(2, 132, 199);
 static const COLORREF DANGER         = RGB(239, 68, 68);
 static const COLORREF DANGER_HOVER   = RGB(185, 28, 28);
 
-#define CARD_PAD       18
+#define CARD_PAD       16
 #define CARD_RADIUS    10
 #define BTN_W          76
 #define BTN_H          30
@@ -42,13 +42,13 @@ static HFONT g_fontBtn   = NULL;
 
 static void EnsureFonts(void) {
     if (g_fontTitle) return;
-    g_fontTitle = CreateFontW(-17, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+    g_fontTitle = CreateFontW(-14, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-    g_fontBody = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0,
+    g_fontBody = CreateFontW(-12, 0, 0, 0, FW_NORMAL, 0, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-    g_fontBtn = CreateFontW(-13, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+    g_fontBtn = CreateFontW(-12, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
 }
@@ -88,9 +88,9 @@ static void PaintCard(HWND hWnd, HDC hdc) {
 
     /* 文本 */
     {
-        RECT rTitle = { CARD_PAD, CARD_PAD, rc.right - CARD_PAD, rc.top + 42 };
-        RECT rL1    = { CARD_PAD, rc.top + 46, rc.right - CARD_PAD, rc.top + 68 };
-        RECT rL2    = { CARD_PAD, rc.top + 70, rc.right - CARD_PAD, rc.top + 92 };
+        RECT rTitle = { CARD_PAD, CARD_PAD, rc.right - CARD_PAD, rc.top + 34 };
+        RECT rL1    = { CARD_PAD, rc.top + 38, rc.right - CARD_PAD, rc.top + 58 };
+        RECT rL2    = { CARD_PAD, rc.top + 60, rc.right - CARD_PAD, rc.top + 80 };
 
         SelectObject(hdc, g_fontTitle);
         SetTextColor(hdc, TEXT_PRIMARY);
