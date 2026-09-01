@@ -182,9 +182,9 @@ static void BuildDashPage(void) {
     SetTimer(g_hHome, 1, 300, NULL);
 
     /* 存句柄给定时器填充用 */
-    SetPropW(g_hHome, L"dash0", g_hRowCards[0]);
-    SetPropW(g_hHome, L"dash1", g_hRowCards[1]);
-    SetPropW(g_hHome, L"dash2", g_hRowCards[2]);
+    SetPropW(g_hHome, L"dash0", g_rowCards[0]);
+    SetPropW(g_hHome, L"dash1", g_rowCards[1]);
+    SetPropW(g_hHome, L"dash2", g_rowCards[2]);
     SetPropW(g_hHome, L"dash3", hOverview);
 }
 
