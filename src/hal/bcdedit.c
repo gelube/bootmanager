@@ -109,7 +109,7 @@ BOOL BcdEditExecute(const WCHAR* command, WCHAR* output, DWORD outputSize) {
 
     SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
 
-    swprintf(cmdLine, 2048, L"cmd.exe /c bcdedit %s", command);
+    swprintf(cmdLine, 2048, L"cmd.exe /c bcdedit %ls", command);
 
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
@@ -172,7 +172,7 @@ BOOL BcdEditCreate(const WCHAR* description, const WCHAR* application, WCHAR* gu
     SanitizeArg(description, safeDesc, 256);
     SanitizeArg(application, safeApp, 64);
 
-    swprintf(command, 1024, L"/create /d \"%s\" /application %s", safeDesc, safeApp);
+    swprintf(command, 1024, L"/create /d \"%ls\" /application %ls", safeDesc, safeApp);
     if (!BcdEditExecute(command, output, 4096)) {
         return FALSE;
     }
@@ -198,7 +198,7 @@ BOOL BcdEditSet(const WCHAR* guid, const WCHAR* property, const WCHAR* value) {
     SanitizeArg(property, safeProp, 64);
     SanitizeArg(value, safeVal, 512);
 
-    swprintf(command, 1024, L"/set %s %s %s", safeGuid, safeProp, safeVal);
+    swprintf(command, 1024, L"/set %ls %ls %ls", safeGuid, safeProp, safeVal);
     return BcdEditExecute(command, NULL, 0);
 }
 
@@ -212,7 +212,7 @@ BOOL BcdEditDelete(const WCHAR* guid) {
 
     SanitizeArg(guid, safeGuid, 64);
 
-    swprintf(command, 512, L"/delete %s", safeGuid);
+    swprintf(command, 512, L"/delete %ls", safeGuid);
     return BcdEditExecute(command, NULL, 0);
 }
 
@@ -223,6 +223,6 @@ BOOL BcdEditEnum(const WCHAR* type, WCHAR* output, DWORD outputSize) {
         return FALSE;
     }
 
-    swprintf(command, 128, L"/enum %s", type);
+    swprintf(command, 128, L"/enum %ls", type);
     return BcdEditExecute(command, output, outputSize);
 }

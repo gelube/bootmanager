@@ -55,7 +55,7 @@ static BOOL CopyDirectoryContents(const WCHAR* srcDir, const WCHAR* destDir)
         return FALSE;
     }
 
-    swprintf(findPath, MAX_PATH, L"%s\\*.*", srcDir);
+    swprintf(findPath, MAX_PATH, L"%ls\\*.*", srcDir);
 
     HANDLE hFind = FindFirstFileW(findPath, &findData);
     if (hFind == INVALID_HANDLE_VALUE) {
@@ -73,8 +73,8 @@ static BOOL CopyDirectoryContents(const WCHAR* srcDir, const WCHAR* destDir)
         WCHAR srcFile[MAX_PATH];
         WCHAR destFile[MAX_PATH];
 
-        swprintf(srcFile, MAX_PATH, L"%s\\%s", srcDir, findData.cFileName);
-        swprintf(destFile, MAX_PATH, L"%s\\%s", destDir, findData.cFileName);
+        swprintf(srcFile, MAX_PATH, L"%ls\\%ls", srcDir, findData.cFileName);
+        swprintf(destFile, MAX_PATH, L"%ls\\%ls", destDir, findData.cFileName);
 
         if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             if (!CopyDirectoryContents(srcFile, destFile)) {
@@ -101,7 +101,7 @@ static BOOL DeleteDirectoryRecursive(const WCHAR* path)
     WCHAR findPath[MAX_PATH];
     WIN32_FIND_DATAW findData;
 
-    swprintf(findPath, MAX_PATH, L"%s\\*.*", path);
+    swprintf(findPath, MAX_PATH, L"%ls\\*.*", path);
 
     HANDLE hFind = FindFirstFileW(findPath, &findData);
     if (hFind != INVALID_HANDLE_VALUE) {
@@ -112,7 +112,7 @@ static BOOL DeleteDirectoryRecursive(const WCHAR* path)
             }
 
             WCHAR filePath[MAX_PATH];
-            swprintf(filePath, MAX_PATH, L"%s\\%s", path, findData.cFileName);
+            swprintf(filePath, MAX_PATH, L"%ls\\%ls", path, findData.cFileName);
 
             if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                 DeleteDirectoryRecursive(filePath);
@@ -148,7 +148,7 @@ BOOL RefindIsInstalled(const WCHAR* espDrive)
     if (!espDrive) return FALSE;
 
     WCHAR refindPath[MAX_PATH];
-    swprintf(refindPath, MAX_PATH, L"%s\\EFI\\refind\\refind_x64.efi", espDrive);
+    swprintf(refindPath, MAX_PATH, L"%ls\\EFI\\refind\\refind_x64.efi", espDrive);
 
     return (GetFileAttributesW(refindPath) != INVALID_FILE_ATTRIBUTES);
 }
@@ -173,12 +173,12 @@ BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
     }
 
     // 检查源文件
-    swprintf(srcFile, MAX_PATH, L"%s\\refind_x64.efi", sourcePath);
+    swprintf(srcFile, MAX_PATH, L"%ls\\refind_x64.efi", sourcePath);
     if (GetFileAttributesW(srcFile) == INVALID_FILE_ATTRIBUTES) {
         // 尝试 sourcePath\refind 子目录
         WCHAR altPath[MAX_PATH];
-        swprintf(altPath, MAX_PATH, L"%s\\refind", sourcePath);
-        swprintf(srcFile, MAX_PATH, L"%s\\refind_x64.efi", altPath);
+        swprintf(altPath, MAX_PATH, L"%ls\\refind", sourcePath);
+        swprintf(srcFile, MAX_PATH, L"%ls\\refind_x64.efi", altPath);
         if (GetFileAttributesW(srcFile) == INVALID_FILE_ATTRIBUTES) {
             RefindSetError(L"未找到 refind_x64.efi");
             return FALSE;
@@ -198,7 +198,7 @@ BOOL RefindInstall(const WCHAR* sourcePath, const WCHAR* espDrive)
     }
 
     // 目标路径
-    swprintf(destRefindDir, MAX_PATH, L"%s\\EFI\\refind", targetEsp);
+    swprintf(destRefindDir, MAX_PATH, L"%ls\\EFI\\refind", targetEsp);
 
     // 创建目录
     if (!CreateDirectoryRecursive(destRefindDir)) {
@@ -270,13 +270,13 @@ BOOL RefindUninstall(const WCHAR* espDrive)
     g_refindLastError[0] = L'\0';
     
     // 删除 EFI\refind 目录
-    swprintf(refindDir, MAX_PATH, L"%s\\EFI\\refind", espDrive);
+    swprintf(refindDir, MAX_PATH, L"%ls\\EFI\\refind", espDrive);
     if (GetFileAttributesW(refindDir) != INVALID_FILE_ATTRIBUTES) {
         // 使用 cmd 删除目录（更可靠）
         STARTUPINFOW si = {0};
         PROCESS_INFORMATION pi = {0};
         WCHAR cmd[MAX_PATH];
-        swprintf(cmd, MAX_PATH, L"cmd.exe /c rmdir /s /q \"%s\"", refindDir);
+        swprintf(cmd, MAX_PATH, L"cmd.exe /c rmdir /s /q \"%ls\"", refindDir);
         si.cb = sizeof(si);
         si.dwFlags = STARTF_USESHOWWINDOW;
         si.wShowWindow = SW_HIDE;

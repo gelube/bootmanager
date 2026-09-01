@@ -114,7 +114,7 @@ INT EnumPhysicalDisks(DISK_INFO** disks)
                 }
                 
                 const WCHAR* typeStr = GetDriveTypeString(driveType);
-                swprintf((*disks)[count].diskName, 64, L"磁盘 %d - %s (%s)", i, sizeStr, typeStr);
+                swprintf((*disks)[count].diskName, 64, L"磁盘 %d - %ls (%ls)", i, sizeStr, typeStr);
             } else {
                 // 无法获取大小时的备用显示
                 swprintf((*disks)[count].diskName, 64, L"磁盘 %d", i);
@@ -149,7 +149,7 @@ INT EnumPhysicalDisks(DISK_INFO** disks)
                         
                         // 检查是否有 EFI 文件夹
                         WCHAR efiPath[MAX_PATH];
-                        swprintf(efiPath, MAX_PATH, L"%sEFI", root);
+                        swprintf(efiPath, MAX_PATH, L"%lsEFI", root);
                         
                         if (GetFileAttributesW(efiPath) != INVALID_FILE_ATTRIBUTES) {
                             (*disks)[i].hasESP = TRUE;
@@ -207,9 +207,9 @@ static BOOL CheckEfiFolder(const WCHAR* rootPath)
     WCHAR efiPath2[MAX_PATH];  // X:\EFI\Microsoft
     WCHAR efiDir[MAX_PATH];    // X:\EFI
     
-    swprintf(efiPath1, MAX_PATH, L"%sEFI\\BOOT\\bootx64.efi", rootPath);
-    swprintf(efiPath2, MAX_PATH, L"%sEFI\\Microsoft", rootPath);
-    swprintf(efiDir, MAX_PATH, L"%sEFI", rootPath);
+    swprintf(efiPath1, MAX_PATH, L"%lsEFI\\BOOT\\bootx64.efi", rootPath);
+    swprintf(efiPath2, MAX_PATH, L"%lsEFI\\Microsoft", rootPath);
+    swprintf(efiDir, MAX_PATH, L"%lsEFI", rootPath);
     
     // 检查 bootx64.efi 文件
     BOOL hasEfiBoot = (GetFileAttributesW(efiPath1) != INVALID_FILE_ATTRIBUTES);
@@ -315,7 +315,7 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
 #ifdef _DEBUG
         {
             WCHAR debugMsg[256];
-            swprintf(debugMsg, 256, L"[ESP] GetVolumePathNamesForVolumeNameW(%s) => %d\n", volumeName, (INT)hasDriveLetter);
+            swprintf(debugMsg, 256, L"[ESP] GetVolumePathNamesForVolumeNameW(%ls) => %d\n", volumeName, (INT)hasDriveLetter);
             OutputDebugStringW(debugMsg);
         }
 #endif
@@ -325,7 +325,7 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
 #ifdef _DEBUG
         {
             WCHAR debugMsg[256];
-            swprintf(debugMsg, 256, L"[ESP] GetVolumeDiskNumber(%s) => %d\n", volumeName, volDiskNum);
+            swprintf(debugMsg, 256, L"[ESP] GetVolumeDiskNumber(%ls) => %d\n", volumeName, volDiskNum);
             OutputDebugStringW(debugMsg);
         }
 #endif
@@ -340,7 +340,7 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
 #ifdef _DEBUG
         {
             WCHAR debugMsg[256];
-            swprintf(debugMsg, 256, L"[ESP] GetVolumeInformationW(%s) => %d, fs=%s\n", volumeName, (INT)gotVolumeInfo, fsName);
+            swprintf(debugMsg, 256, L"[ESP] GetVolumeInformationW(%ls) => %d, fs=%ls\n", volumeName, (INT)gotVolumeInfo, fsName);
             OutputDebugStringW(debugMsg);
         }
 #endif
@@ -386,7 +386,7 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
             // 如果临时挂载失败，尝试直接使用 Volume GUID 路径检查
             if (!hasEfi && !isMountedTemporarily) {
                 WCHAR efiPath[MAX_PATH];
-                swprintf(efiPath, MAX_PATH, L"%sEFI", volumeName);
+                swprintf(efiPath, MAX_PATH, L"%lsEFI", volumeName);
                 DWORD attr = GetFileAttributesW(efiPath);
                 if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
                     hasEfi = TRUE;
@@ -404,10 +404,10 @@ INT EnumEspPartitionsForDisk(INT diskNumber, PARTITION_INFO** partitions)
             // 构建显示名称 - 简化版
             if (wcslen(volumeLabel) > 0) {
                 swprintf((*partitions)[count].label, 128,
-                    L"ESP 分区 - %s (%s)", fsName, volumeLabel);
+                    L"ESP 分区 - %ls (%ls)", fsName, volumeLabel);
             } else {
                 swprintf((*partitions)[count].label, 128,
-                    L"ESP 分区 - %s", fsName);
+                    L"ESP 分区 - %ls", fsName);
             }
 
             count++;
@@ -614,7 +614,7 @@ static LRESULT CALLBACK AddEfiDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPA
                     data->partitions[data->selectedPartition].driveLetter <= L'Z' &&
                     data->filePath[0] == L'\\') {
                     WCHAR fullPath[512] = {0};
-                    swprintf(fullPath, 512, L"%c:%s",
+                    swprintf(fullPath, 512, L"%c:%ls",
                         data->partitions[data->selectedPartition].driveLetter,
                         data->filePath);
                     wcsncpy(data->filePath, fullPath, 511);

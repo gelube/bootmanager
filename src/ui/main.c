@@ -661,7 +661,7 @@ static int EnumEspPartitions(ESP_PARTITION_INFO** partitions)
                 
                 // 检查是否是 ESP（有 EFI 目录）
                 WCHAR efiPath[MAX_PATH];
-                swprintf(efiPath, MAX_PATH, L"%s\\EFI", root);
+                swprintf(efiPath, MAX_PATH, L"%ls\\EFI", root);
                 info->isESP = (GetFileAttributesW(efiPath) != INVALID_FILE_ATTRIBUTES);
                 
                 // 获取磁盘号
@@ -685,11 +685,11 @@ static int EnumEspPartitions(ESP_PARTITION_INFO** partitions)
                 }
                 
                 if (volumeLabel[0]) {
-                    swprintf(info->displayName, 128, L"%c: %s (%s, %s)%s", 
+                    swprintf(info->displayName, 128, L"%c: %ls (%ls, %ls)%ls", 
                         p[0], volumeLabel, sizeStr, fsName, 
                         info->isESP ? L" [ESP]" : L"");
                 } else {
-                    swprintf(info->displayName, 128, L"%c: (%s, %s)%s", 
+                    swprintf(info->displayName, 128, L"%c: (%ls, %ls)%ls", 
                         p[0], sizeStr, fsName, 
                         info->isESP ? L" [ESP]" : L"");
                 }
@@ -1009,7 +1009,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 // 检查是否在已知 ESP 盘符上
                 if (driveLetter[0] && path[0] == driveLetter[0]) {
                     // 在选中的 ESP 分区上
-                    swprintf(efiPath, 512, L"\\%s", path + 3);  // 去掉盘符
+                    swprintf(efiPath, 512, L"\\%ls", path + 3);  // 去掉盘符
                 } else {
                     // 不在 ESP 上，需要复制
                     needCopy = TRUE;
@@ -1017,7 +1017,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             } else if (path[0] == L'\\') {
                 // 相对路径
                 if (driveLetter[0]) {
-                    swprintf(fullPath, 512, L"%s%s", driveLetter, path);
+                    swprintf(fullPath, 512, L"%ls%ls", driveLetter, path);
                     wcscpy(efiPath, path);
                 } else {
                     // 没有选择 ESP 分区，尝试挂载
@@ -1026,7 +1026,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         break;
                     }
                     mounted = TRUE;
-                    swprintf(fullPath, 512, L"%s%s", esp, path);
+                    swprintf(fullPath, 512, L"%ls%ls", esp, path);
                     wcscpy(efiPath, path);
                 }
             } else {
@@ -1061,9 +1061,9 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 
                 // 构建目标目录和路径
                 WCHAR destDir[MAX_PATH], destPath[MAX_PATH];
-                swprintf(destDir, MAX_PATH, L"%s\\EFI\\%s", esp, dirName);
-                swprintf(destPath, MAX_PATH, L"%s\\%s", destDir, fileName);
-                swprintf(efiPath, 512, L"\\EFI\\%s\\%s", dirName, fileName);
+                swprintf(destDir, MAX_PATH, L"%ls\\EFI\\%ls", esp, dirName);
+                swprintf(destPath, MAX_PATH, L"%ls\\%ls", destDir, fileName);
+                swprintf(efiPath, 512, L"\\EFI\\%ls\\%ls", dirName, fileName);
                 
                 // 创建目录（递归创建父目录）
                 WCHAR parentDir[MAX_PATH];
@@ -1239,11 +1239,11 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 if (s_limineStatus) SetWindowTextW(s_limineStatus, L"Limine 已安装");
                 
                 // 设置配置目录
-                swprintf(s_limineConfDir, MAX_PATH, L"%s\\EFI\\limine", esp);
+                swprintf(s_limineConfDir, MAX_PATH, L"%ls\\EFI\\limine", esp);
                 RefreshLimineEntryList();
             } else {
                 WCHAR msg[512];
-                swprintf(msg, 512, L"安装失败\n%s", LimineGetLastErrorMessage());
+                swprintf(msg, 512, L"安装失败\n%ls", LimineGetLastErrorMessage());
                 MessageBoxW(hWnd, msg, L"错误", MB_OK | MB_ICONERROR);
             }
             EspUnmountEx(esp, FALSE);  // Always unmount ESP after operation
@@ -1315,7 +1315,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;
             }
             WCHAR msg[256];
-            swprintf(msg, 256, L"确定删除 \"%s\" 吗？", s_limineEntries[sel].name);
+            swprintf(msg, 256, L"确定删除 \"%ls\" 吗？", s_limineEntries[sel].name);
             if (MessageBoxW(hWnd, msg, L"确认", MB_YESNO) == IDYES) {
                 for (int i = sel; i < s_limineEntryCount - 1; i++) {
                     s_limineEntries[i] = s_limineEntries[i + 1];
@@ -1336,7 +1336,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             WCHAR dir[MAX_PATH] = {0}, file[MAX_PATH];
             BackupGetBackupDir(dir, MAX_PATH);
             SYSTEMTIME st; GetLocalTime(&st);
-            swprintf(file, MAX_PATH, L"%s\\MBR_%04d%02d%02d.bin", dir, st.wYear, st.wMonth, st.wDay);
+            swprintf(file, MAX_PATH, L"%ls\\MBR_%04d%02d%02d.bin", dir, st.wYear, st.wMonth, st.wDay);
             if (BackupMBR(L"PhysicalDrive0", file)) {
                 MessageBoxW(hWnd, L"备份成功", L"完成", MB_OK);
             } else {
@@ -1474,7 +1474,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             GetLocaleInfoW(LOCALE_SYSTEM_DEFAULT, LOCALE_SNAME, locale, 16);
 
             WCHAR params[512];
-            swprintf(params, 512, L"cmd.exe /c bcdboot %s /l %s /s %c: /f UEFI", sysRoot, locale, espDrive[0]);
+            swprintf(params, 512, L"cmd.exe /c bcdboot %ls /l %ls /s %c: /f UEFI", sysRoot, locale, espDrive[0]);
 
             // Use CreateProcessW instead of ShellExecuteExW for WinPE compatibility
             STARTUPINFOW si = {0}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
@@ -1831,11 +1831,11 @@ static BOOL LoadLimineConfEntries(void)
             return FALSE;
         }
         // Update conf dir with new drive letter
-        swprintf(s_limineConfDir, MAX_PATH, L"%s\\EFI\\limine", esp);
+        swprintf(s_limineConfDir, MAX_PATH, L"%ls\\EFI\\limine", esp);
     }
     
     WCHAR confPath[MAX_PATH];
-    swprintf(confPath, MAX_PATH, L"%s\\limine.conf", s_limineConfDir);
+    swprintf(confPath, MAX_PATH, L"%ls\\limine.conf", s_limineConfDir);
     
     HANDLE hFile = CreateFileW(confPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
@@ -1962,11 +1962,11 @@ static BOOL SaveLimineConfEntries(void)
         if (!EspMountEx(esp, 4, &espMountedByUs)) {
             return FALSE;
         }
-        swprintf(s_limineConfDir, MAX_PATH, L"%s\\EFI\\limine", esp);
+        swprintf(s_limineConfDir, MAX_PATH, L"%ls\\EFI\\limine", esp);
     }
     
     WCHAR confPath[MAX_PATH];
-    swprintf(confPath, MAX_PATH, L"%s\\limine.conf", s_limineConfDir);
+    swprintf(confPath, MAX_PATH, L"%ls\\limine.conf", s_limineConfDir);
     
     HANDLE hFile = CreateFileW(confPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) goto save_cleanup;
@@ -1993,11 +1993,11 @@ static BOOL SaveLimineConfEntries(void)
     for (int i = 0; i < s_limineEntryCount; i++) {
         LIMINE_CONF_ENTRY* e = &s_limineEntries[i];
         WCHAR entry[2048];
-        int entryLen = swprintf(entry, 2048, L"/%s\n    protocol: %s\n    path: %s\n", e->name, e->protocol, e->path);
+        int entryLen = swprintf(entry, 2048, L"/%ls\n    protocol: %ls\n    path: %ls\n", e->name, e->protocol, e->path);
 
         // Write cmdline if present (for linux protocol)
         if (wcslen(e->cmdline) > 0) {
-            entryLen += swprintf(entry + entryLen, 2048 - entryLen, L"    kernel_cmdline: %s\n", e->cmdline);
+            entryLen += swprintf(entry + entryLen, 2048 - entryLen, L"    kernel_cmdline: %ls\n", e->cmdline);
         }
         entryLen += swprintf(entry + entryLen, 2048 - entryLen, L"\n");
 
@@ -2082,9 +2082,9 @@ static void RefreshLimineEntryList(void)
     if (s_limineStatus) {
         WCHAR status[512];
         if (s_limineEntryCount > 0) {
-            swprintf(status, 512, L"共 %d 个启动项 [%s]", s_limineEntryCount, s_limineConfDir);
+            swprintf(status, 512, L"共 %d 个启动项 [%ls]", s_limineEntryCount, s_limineConfDir);
         } else {
-            swprintf(status, 512, L"配置文件为空或无效 [%s\\limine.conf]", s_limineConfDir);
+            swprintf(status, 512, L"配置文件为空或无效 [%ls\\limine.conf]", s_limineConfDir);
         }
         SetWindowTextW(s_limineStatus, status);
     }
@@ -2276,7 +2276,7 @@ static LRESULT CALLBACK LimineEditDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LP
                     // normalizedPath 已以 "/" 开头
                     
                     // boot:// + normalizedPath = boot:///path （三个斜杠，在所有设备搜索）
-                    swprintf(liminePath, MAX_PATH, L"boot://%s", normalizedPath);
+                    swprintf(liminePath, MAX_PATH, L"boot://%ls", normalizedPath);
                     
                     wcsncpy(g_editEntry->path, liminePath, MAX_PATH - 1);
                     
@@ -2470,11 +2470,11 @@ static void LimineRefreshStatus(void)
         
         if (EspMountEx(esp, 4, &mountedByUs)) {
             WCHAR efiPath[MAX_PATH];
-            swprintf(efiPath, MAX_PATH, L"%s\\EFI\\limine\\BOOTX64.EFI", esp);
+            swprintf(efiPath, MAX_PATH, L"%ls\\EFI\\limine\\BOOTX64.EFI", esp);
             
             if (GetFileAttributesW(efiPath) != INVALID_FILE_ATTRIBUTES) {
                 status = LIMINE_INSTALLED_UEFI;
-                swprintf(s_limineConfDir, MAX_PATH, L"%s\\EFI\\limine", esp);
+                swprintf(s_limineConfDir, MAX_PATH, L"%ls\\EFI\\limine", esp);
             }
             // Always unmount ESP after detection — don't leak mounted partitions to user
             EspUnmountEx(esp, FALSE);
@@ -2493,7 +2493,7 @@ static void LimineRefreshStatus(void)
         WCHAR txt[512];
         if (installed) {
             const WCHAR* mode = (status == LIMINE_INSTALLED_UEFI) ? L"UEFI" : L"MBR";
-            swprintf(txt, 512, L"已安装 (%s) [%s]", mode, s_limineConfDir);
+            swprintf(txt, 512, L"已安装 (%ls) [%ls]", mode, s_limineConfDir);
             SetWindowTextW(s_limineStatus, txt);
             RefreshLimineEntryList();
         } else {
@@ -2638,9 +2638,9 @@ static BOOL ResolveRefindSourcePath(WCHAR* path, DWORD size)
     WCHAR testPath[MAX_PATH];
     
     // 1. 程序目录\refind
-    swprintf(testPath, MAX_PATH, L"%s\\refind\\refind_x64.efi", exeDir);
+    swprintf(testPath, MAX_PATH, L"%ls\\refind\\refind_x64.efi", exeDir);
     if (GetFileAttributesW(testPath) != INVALID_FILE_ATTRIBUTES) {
-        swprintf(path, size, L"%s\\refind", exeDir);
+        swprintf(path, size, L"%ls\\refind", exeDir);
         return TRUE;
     }
     
@@ -2660,23 +2660,23 @@ static BOOL ResolveLimineSourcePath(WCHAR* path, DWORD size)
     WCHAR testPath[MAX_PATH];
     
     // 1. 程序目录\limine\limine-bios.sys (BIOS)
-    swprintf(testPath, MAX_PATH, L"%s\\limine\\limine-bios.sys", exeDir);
+    swprintf(testPath, MAX_PATH, L"%ls\\limine\\limine-bios.sys", exeDir);
     if (GetFileAttributesW(testPath) != INVALID_FILE_ATTRIBUTES) {
-        swprintf(path, size, L"%s\\limine", exeDir);
+        swprintf(path, size, L"%ls\\limine", exeDir);
         return TRUE;
     }
     
     // 2. 程序目录\limine\limine-efi\BOOTX64.EFI (UEFI)
-    swprintf(testPath, MAX_PATH, L"%s\\limine\\limine-efi\\BOOTX64.EFI", exeDir);
+    swprintf(testPath, MAX_PATH, L"%ls\\limine\\limine-efi\\BOOTX64.EFI", exeDir);
     if (GetFileAttributesW(testPath) != INVALID_FILE_ATTRIBUTES) {
-        swprintf(path, size, L"%s\\limine", exeDir);
+        swprintf(path, size, L"%ls\\limine", exeDir);
         return TRUE;
     }
     
     // 3. 程序目录\limine\BOOTX64.EFI (简化结构)
-    swprintf(testPath, MAX_PATH, L"%s\\limine\\BOOTX64.EFI", exeDir);
+    swprintf(testPath, MAX_PATH, L"%ls\\limine\\BOOTX64.EFI", exeDir);
     if (GetFileAttributesW(testPath) != INVALID_FILE_ATTRIBUTES) {
-        swprintf(path, size, L"%s\\limine", exeDir);
+        swprintf(path, size, L"%ls\\limine", exeDir);
         return TRUE;
     }
     

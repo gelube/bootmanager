@@ -202,7 +202,7 @@ BOOL UefiAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR* f
     WCHAR efiPath[512] = {0};
     if (filePath && filePath[1] == L':' && filePath[2] == L'\\') {
         // 去掉盘符前缀
-        swprintf(efiPath, 512, L"\\%s", filePath + 3);
+        swprintf(efiPath, 512, L"\\%ls", filePath + 3);
     } else if (filePath) {
         wcsncpy(efiPath, filePath, 511);
     }
@@ -312,7 +312,7 @@ static BOOL DeleteDirectoryRecursive(const WCHAR* path)
     WCHAR findPath[MAX_PATH];
     WIN32_FIND_DATAW findData;
 
-    swprintf(findPath, MAX_PATH, L"%s\\*.*", path);
+    swprintf(findPath, MAX_PATH, L"%ls\\*.*", path);
 
     HANDLE hFind = FindFirstFileW(findPath, &findData);
     if (hFind != INVALID_HANDLE_VALUE) {
@@ -323,7 +323,7 @@ static BOOL DeleteDirectoryRecursive(const WCHAR* path)
             }
 
             WCHAR filePath[MAX_PATH];
-            swprintf(filePath, MAX_PATH, L"%s\\%s", path, findData.cFileName);
+            swprintf(filePath, MAX_PATH, L"%ls\\%ls", path, findData.cFileName);
 
             if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
                 DeleteDirectoryRecursive(filePath);
@@ -381,7 +381,7 @@ static void DeleteEfiDirectoryFromEsp(const WCHAR* efiPath)
     
     // 构建完整目录路径
     WCHAR fullPath[MAX_PATH];
-    swprintf(fullPath, MAX_PATH, L"%s\\EFI\\%s", esp, dirName);
+    swprintf(fullPath, MAX_PATH, L"%ls\\EFI\\%ls", esp, dirName);
     
     // 检查目录是否存在
     if (GetFileAttributesW(fullPath) != INVALID_FILE_ATTRIBUTES) {

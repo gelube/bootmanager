@@ -23,7 +23,7 @@
 static const COLORREF HOME_BG = RGB(246, 248, 250);
 
 #define HOME_W   960
-#define HOME_H   680
+#define HOME_H   820
 #define CARD_W   264
 #define CARD_H   168
 #define CARD_GAP  24
@@ -237,17 +237,31 @@ static void BuildBootMgrPage(void) {
     }
 
     e = g_bootList->entries;
-    for (i = 0; i < MAX_ROWS && e; i++, e = e->next) {
-        WCHAR line1[128], line2[160];
-        const WCHAR* name = BootMgrGetEntryName(e);
-        const WCHAR* path = BootMgrGetEntryPath(e);
-        swprintf(line1, 128, L"%d. %ls", i + 1, name && name[0] ? name : L"(未命名)");
-        swprintf(line2, 160, L"%ls", path && path[0] ? path : L"-");
-        g_rowCards[i] = BMCard_Create(g_hHome, 100 + i, MARGIN, y,
-                                      CARD_W * 3 + CARD_GAP * 2, 96,
-                                      line1, line2, NULL, NULL, FALSE);
-        y += 96 + 12;
-        g_rowCount++;
+    {
+        int total = 0, shown = 0;
+        BOOTMGR_BOOT_ENTRY* t;
+        for (t = e; t; t = t->next) total++;
+        for (i = 0; i < MAX_ROWS && e; i++, e = e->next) {
+            WCHAR line1[128], line2[160];
+            const WCHAR* name = BootMgrGetEntryName(e);
+            const WCHAR* path = BootMgrGetEntryPath(e);
+            if (y > 560) break;   /* 窗口高度内最多显示到 560px */
+            swprintf(line1, 128, L"%d. %ls", i + 1, name && name[0] ? name : L"(未命名)");
+            swprintf(line2, 160, L"%ls", path && path[0] ? path : L"-");
+            g_rowCards[i] = BMCard_Create(g_hHome, 100 + i, MARGIN, y,
+                                          CARD_W * 3 + CARD_GAP * 2, 72,
+                                          line1, line2, NULL, NULL, FALSE);
+            y += 72 + 10;
+            g_rowCount++;
+            shown++;
+        }
+        if (shown < total) {
+            WCHAR tip[96];
+            swprintf(tip, 96, L"已显示 %d / 共 %d 项", shown, total);
+            BMCard_Create(g_hHome, 899, MARGIN, y, CARD_W * 3 + CARD_GAP * 2, 56,
+                          tip, L"", NULL, NULL, FALSE);
+            y += 56 + 10;
+        }
     }
 
     /* 操作栏 */
