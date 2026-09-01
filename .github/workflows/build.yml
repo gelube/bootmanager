@@ -27,6 +27,7 @@ jobs:
             src/ui/main.c src/ui/dialog.c src/ui/home.c src/ui/cards.c \
             src/ui/dialogs/add_efi_dialog.c \
             src/core/ops.c \
+            src/core/envinfo.c \
             src/core/boot.c src/core/boot_mode.c src/core/esp.c \
             src/core/limine.c src/core/mbr_manager.c \
             src/core/refind.c src/core/uefi.c src/core/uefi_nvram.c \
