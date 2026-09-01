@@ -96,7 +96,7 @@ static BOOL ExecuteCommand(const WCHAR* cmd, CHAR* output, DWORD outputSize) {
     PROCESS_INFORMATION pi = {0};
 
     WCHAR fullCmd[2048];
-    swprintf(fullCmd, 2048, L"cmd.exe /c %s", cmd);
+    swprintf(fullCmd, 2048, L"cmd.exe /c %ls", cmd);
 
     if (!CreateProcessW(NULL, fullCmd, NULL, NULL, TRUE,
         CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
@@ -155,7 +155,7 @@ static void CleanupBootEntryByGuid(const WCHAR* guid) {
 
     WCHAR cmd[512];
     CHAR output[4096] = {0};
-    swprintf(cmd, 512, L"bcdedit /delete %s /f", guid);
+    swprintf(cmd, 512, L"bcdedit /delete %ls /f", guid);
     ExecuteCommand(cmd, output, sizeof(output));
 }
 
@@ -519,7 +519,7 @@ BOOL BootMgrSetBootOrder(const DWORD* bootOrder, DWORD count) {
             continue;
         }
 
-        offset += swprintf(cmd + offset, 4096 - offset, L" %s", guid);
+        offset += swprintf(cmd + offset, 4096 - offset, L" %ls", guid);
         foundAny = TRUE;
     }
 
@@ -540,7 +540,7 @@ BOOL BootMgrAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR
     // Normalize EFI path: strip drive letter prefix (X:\EFI\... -> \EFI\...)
     WCHAR efiPath[512] = {0};
     if (filePath && filePath[0] >= L'A' && filePath[0] <= L'Z' && filePath[1] == L':' && filePath[2] == L'\\') {
-        swprintf(efiPath, 512, L"\\%s", filePath + 3);
+        swprintf(efiPath, 512, L"\\%ls", filePath + 3);
     } else if (filePath) {
         wcsncpy(efiPath, filePath, 511);
     }
@@ -640,7 +640,7 @@ BOOL BootMgrDeleteBootEntry(DWORD id) {
     
     // 鎵ц bcdedit /delete {guid}
     WCHAR cmd[512];
-    swprintf(cmd, 512, L"bcdedit /delete %s", guid);
+    swprintf(cmd, 512, L"bcdedit /delete %ls", guid);
     
     CHAR output[4096] = {0};
     return ExecuteCommand(cmd, output, sizeof(output));
@@ -715,7 +715,7 @@ BOOL BootMgrSetDefaultBootEntry(BOOTMGR_BOOT_LIST* list, DWORD id) {
     
     // 鎵ц bcdedit /default {guid}
     WCHAR cmd[512];
-    swprintf(cmd, 512, L"bcdedit /default %s", guid);
+    swprintf(cmd, 512, L"bcdedit /default %ls", guid);
     
     CHAR output[4096] = {0};
     return ExecuteCommand(cmd, output, sizeof(output));
@@ -741,7 +741,7 @@ BOOL BootMgrExportNVRAM(const WCHAR* filePath) {
 
     // Use BcdEditExecute instead of ShellExecuteExW to avoid cmd.exe injection
     WCHAR command[1024];
-    swprintf(command, 1024, L"/export \"%s\"", filePath);
+    swprintf(command, 1024, L"/export \"%ls\"", filePath);
 
     WCHAR output[4096] = {0};
     return BcdEditExecute(command, output, 4096);
@@ -757,7 +757,7 @@ BOOL BootMgrImportNVRAM(const WCHAR* filePath) {
 
     // Use BcdEditExecute instead of ShellExecuteExW to avoid cmd.exe injection
     WCHAR command[1024];
-    swprintf(command, 1024, L"/import \"%s\" /clean", filePath);
+    swprintf(command, 1024, L"/import \"%ls\" /clean", filePath);
 
     WCHAR output[4096] = {0};
     return BcdEditExecute(command, output, 4096);

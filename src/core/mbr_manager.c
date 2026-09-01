@@ -1020,7 +1020,7 @@ bool MBR_Install(int diskNumber, MBR_BOOT_TYPE bootType, WCHAR* error, DWORD err
 static BYTE* LoadBootCodeFromFile(const WCHAR* filePath, DWORD* outSize, WCHAR* error, DWORD errorSize) {
     HANDLE hFile = CreateFileW(filePath, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        if (error) swprintf(error, errorSize, L"无法打开文件: %s", filePath);
+        if (error) swprintf(error, errorSize, L"无法打开文件: %ls", filePath);
         return NULL;
     }
     
@@ -1066,16 +1066,16 @@ static bool FindLimineSource(WCHAR* sourcePath, DWORD size) {
     };
     
     for (int i = 0; subdirs[i]; i++) {
-        swprintf(sourcePath, size, L"%s%s", exeDir, subdirs[i]);
+        swprintf(sourcePath, size, L"%ls%ls", exeDir, subdirs[i]);
         
         // 检查 limine.exe 或 limine-bios.sys
         WCHAR testFile[MAX_PATH];
-        swprintf(testFile, MAX_PATH, L"%s\\limine.exe", sourcePath);
+        swprintf(testFile, MAX_PATH, L"%ls\\limine.exe", sourcePath);
         if (GetFileAttributesW(testFile) != INVALID_FILE_ATTRIBUTES) {
             return true;
         }
         
-        swprintf(testFile, MAX_PATH, L"%s\\limine-bios.sys", sourcePath);
+        swprintf(testFile, MAX_PATH, L"%ls\\limine-bios.sys", sourcePath);
         if (GetFileAttributesW(testFile) != INVALID_FILE_ATTRIBUTES) {
             return true;
         }
@@ -1099,12 +1099,12 @@ bool MBR_InstallLimine(int diskNumber, const WCHAR* limineSource, bool installFi
     
     // 检查 limine.exe 是否存在
     WCHAR limineExe[MAX_PATH];
-    swprintf(limineExe, MAX_PATH, L"%s\\limine.exe", limineSource);
+    swprintf(limineExe, MAX_PATH, L"%ls\\limine.exe", limineSource);
     
     if (GetFileAttributesW(limineExe) == INVALID_FILE_ATTRIBUTES) {
         // 没有 limine.exe，检查是否有 limine-mbr.bin（旧版兼容）
         WCHAR mbrPath[MAX_PATH];
-        swprintf(mbrPath, MAX_PATH, L"%s\\limine-mbr.bin", limineSource);
+        swprintf(mbrPath, MAX_PATH, L"%ls\\limine-mbr.bin", limineSource);
         
         if (GetFileAttributesW(mbrPath) != INVALID_FILE_ATTRIBUTES) {
             // 使用旧的 MBR bin 文件方式
@@ -1153,7 +1153,7 @@ bool MBR_InstallLimine(int diskNumber, const WCHAR* limineSource, bool installFi
         // 使用 limine.exe bios-install 命令（推荐方式）
         // 构建命令行: limine.exe bios-install --force \\.\PhysicalDriveN
         WCHAR cmdLine[MAX_PATH * 2];
-        swprintf(cmdLine, MAX_PATH * 2, L"\"%s\" bios-install --force \\\\.\\PhysicalDrive%d", 
+        swprintf(cmdLine, MAX_PATH * 2, L"\"%ls\" bios-install --force \\\\.\\PhysicalDrive%d", 
                  limineExe, diskNumber);
         
         // 创建管道捕获输出
@@ -1223,7 +1223,7 @@ bool MBR_InstallLimine(int diskNumber, const WCHAR* limineSource, bool installFi
             if (cr) *cr = L'\0';
             
             if (outputW[0]) {
-                swprintf(error, errorSize, L"%s", outputW);
+                swprintf(error, errorSize, L"%ls", outputW);
             } else {
                 swprintf(error, errorSize, L"Limine 安装失败，退出码: %lu", exitCode);
             }
@@ -1254,7 +1254,7 @@ bool MBR_InstallLimine(int diskNumber, const WCHAR* limineSource, bool installFi
                     CreateDirectoryW(targetDir, NULL);
                     
                     // 复制 limine-bios.sys
-                    swprintf(srcFile, MAX_PATH, L"%s\\limine-bios.sys", limineSource);
+                    swprintf(srcFile, MAX_PATH, L"%ls\\limine-bios.sys", limineSource);
                     swprintf(destFile, MAX_PATH, L"%c:\\boot\\limine\\limine.sys", info.partitions[i].driveLetter);
                     if (GetFileAttributesW(srcFile) != INVALID_FILE_ATTRIBUTES) {
                         CopyFileW(srcFile, destFile, FALSE);
@@ -1310,7 +1310,7 @@ bool MBR_InstallGrub4Dos(int diskNumber, const WCHAR* grubSource, WCHAR* error, 
     }
     
     WCHAR mbrPath[MAX_PATH];
-    swprintf(mbrPath, MAX_PATH, L"%s\\g4d_mbr.bin", grubSource);
+    swprintf(mbrPath, MAX_PATH, L"%ls\\g4d_mbr.bin", grubSource);
     
     DWORD bootCodeSize = 0;
     BYTE* bootCode = LoadBootCodeFromFile(mbrPath, &bootCodeSize, error, errorSize);

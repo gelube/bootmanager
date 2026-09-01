@@ -109,7 +109,7 @@ static BOOL RunMountvol(const WCHAR* command) {
     PROCESS_INFORMATION pi = {0};
     WCHAR cmdLine[128];
 
-    swprintf(cmdLine, 128, L"cmd.exe /c mountvol %s", command);
+    swprintf(cmdLine, 128, L"cmd.exe /c mountvol %ls", command);
 
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;

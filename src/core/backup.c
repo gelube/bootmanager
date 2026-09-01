@@ -99,7 +99,7 @@ BOOL BackupMBR(const WCHAR* drive, const WCHAR* outputPath) {
     
     // Open physical drive
     WCHAR drivePath[32];
-    swprintf(drivePath, 32, L"\\\\.\\%s", drive);
+    swprintf(drivePath, 32, L"\\\\.\\%ls", drive);
     
     hDrive = CreateFileW(drivePath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
         NULL, OPEN_EXISTING, 0, NULL);
@@ -158,7 +158,7 @@ BOOL RestoreMBR(const WCHAR* drive, const WCHAR* backupPath) {
     
     // Open physical drive for writing
     WCHAR drivePath[32];
-    swprintf(drivePath, 32, L"\\\\.\\%s", drive);
+    swprintf(drivePath, 32, L"\\\\.\\%ls", drive);
     
     hDrive = CreateFileW(drivePath, GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -194,7 +194,7 @@ BOOL BackupBCD(const WCHAR* outputPath) {
     
     if (!outputPath) return FALSE;
     
-    swprintf(cmd, 1024, L"cmd.exe /c bcdedit /export \"%s\"", outputPath);
+    swprintf(cmd, 1024, L"cmd.exe /c bcdedit /export \"%ls\"", outputPath);
     
     STARTUPINFOW si = {0}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi = {0};
@@ -211,9 +211,9 @@ BOOL BackupBCD(const WCHAR* outputPath) {
             WCHAR logPath[MAX_PATH];
             for (int i = 0; i <= 2; i++) {
                 if (i == 0) {
-                    swprintf(logPath, MAX_PATH, L"%s.LOG", outputPath);
+                    swprintf(logPath, MAX_PATH, L"%ls.LOG", outputPath);
                 } else {
-                    swprintf(logPath, MAX_PATH, L"%s.LOG%d", outputPath, i);
+                    swprintf(logPath, MAX_PATH, L"%ls.LOG%d", outputPath, i);
                 }
                 DeleteFileW(logPath);
             }
@@ -230,7 +230,7 @@ BOOL RestoreBCD(const WCHAR* backupPath) {
     
     if (!backupPath) return FALSE;
     
-    swprintf(cmd, 1024, L"cmd.exe /c bcdedit /import \"%s\" /clean", backupPath);
+    swprintf(cmd, 1024, L"cmd.exe /c bcdedit /import \"%ls\" /clean", backupPath);
     
     STARTUPINFOW si = {0}; si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi = {0};
@@ -273,14 +273,14 @@ BOOL BackupAll(const WCHAR* backupDir, BACKUP_TYPE types) {
     BackupGenerateTimestamp(timestamp, 32);
     
     // Create backup directory
-    swprintf(path, MAX_PATH, L"%s\\Backup_%s", backupDir, timestamp);
+    swprintf(path, MAX_PATH, L"%ls\\Backup_%ls", backupDir, timestamp);
     if (!BackupCreateDirectory(path)) {
         return FALSE;
     }
     
     // Backup MBR
     if (types & BACKUP_MBR) {
-        swprintf(path, MAX_PATH, L"%s\\Backup_%s\\mbr.bin", backupDir, timestamp);
+        swprintf(path, MAX_PATH, L"%ls\\Backup_%ls\\mbr.bin", backupDir, timestamp);
         WCHAR drive[40];
         int sysDisk = MBR_GetSystemDiskNumber();
         if (sysDisk < 0) sysDisk = 0;
@@ -292,7 +292,7 @@ BOOL BackupAll(const WCHAR* backupDir, BACKUP_TYPE types) {
     
     // Backup BCD
     if (types & BACKUP_BCD) {
-        swprintf(path, MAX_PATH, L"%s\\Backup_%s\\bcd.bak", backupDir, timestamp);
+        swprintf(path, MAX_PATH, L"%ls\\Backup_%ls\\bcd.bak", backupDir, timestamp);
         if (!BackupBCD(path)) {
             result = FALSE;
         }
@@ -300,7 +300,7 @@ BOOL BackupAll(const WCHAR* backupDir, BACKUP_TYPE types) {
     
     // Backup NVRAM
     if (types & BACKUP_NVRAM) {
-        swprintf(path, MAX_PATH, L"%s\\Backup_%s\\nvram.bak", backupDir, timestamp);
+        swprintf(path, MAX_PATH, L"%ls\\Backup_%ls\\nvram.bak", backupDir, timestamp);
         if (!BackupNVRAM(path)) {
             result = FALSE;
         }
@@ -317,7 +317,7 @@ BOOL RestoreAll(const WCHAR* backupDir, BACKUP_TYPE types) {
     if (!backupDir) return FALSE;
 
     if (types & BACKUP_MBR) {
-        swprintf(path, MAX_PATH, L"%s\\mbr.bin", backupDir);
+        swprintf(path, MAX_PATH, L"%ls\\mbr.bin", backupDir);
         if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
             WCHAR drive[40];
             int sysDisk = MBR_GetSystemDiskNumber();
@@ -330,7 +330,7 @@ BOOL RestoreAll(const WCHAR* backupDir, BACKUP_TYPE types) {
     }
 
     if (types & BACKUP_BCD) {
-        swprintf(path, MAX_PATH, L"%s\\bcd.bak", backupDir);
+        swprintf(path, MAX_PATH, L"%ls\\bcd.bak", backupDir);
         if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
             result = RestoreBCD(path) && result;
         } else {
@@ -339,7 +339,7 @@ BOOL RestoreAll(const WCHAR* backupDir, BACKUP_TYPE types) {
     }
 
     if (types & BACKUP_NVRAM) {
-        swprintf(path, MAX_PATH, L"%s\\nvram.bak", backupDir);
+        swprintf(path, MAX_PATH, L"%ls\\nvram.bak", backupDir);
         if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
             result = RestoreNVRAM(path) && result;
         } else {
@@ -361,7 +361,7 @@ static BOOL RunElevatedCommand(const WCHAR* parameters) {
     si.wShowWindow = SW_HIDE;
 
     WCHAR cmdLine[1024];
-    swprintf(cmdLine, 1024, L"cmd.exe %s", parameters);
+    swprintf(cmdLine, 1024, L"cmd.exe %ls", parameters);
 
     if (!CreateProcessW(NULL, cmdLine, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         return FALSE;
@@ -398,7 +398,7 @@ BOOL RepairBCDBoot(const WCHAR* windowsDir, const WCHAR* targetDrive) {
     
     if (!windowsDir || !targetDrive) return FALSE;
     
-    swprintf(cmd, 1024, L"/c bcdboot \"%s\" /s %s /f UEFI", windowsDir, targetDrive);
+    swprintf(cmd, 1024, L"/c bcdboot \"%ls\" /s %ls /f UEFI", windowsDir, targetDrive);
 
     if (EnvIsWinPE()) {
         /* PE 下无 UAC/Shell，直接 CreateProcess */

@@ -39,7 +39,7 @@ static BOOL MakeAutoBackupPath(int diskNumber, WCHAR out[MAX_PATH]) {
     CreateDirectoryW(dir, NULL);
 
     GetLocalTime(&st);
-    swprintf(out, MAX_PATH, L"%s\\%04u%02u%02u_%02u%02u%02u_disk%d.bin",
+    swprintf(out, MAX_PATH, L"%ls\\%04u%02u%02u_%02u%02u%02u_disk%d.bin",
              dir, st.wYear, st.wMonth, st.wDay,
              st.wHour, st.wMinute, st.wSecond, diskNumber);
     (void)ts;
@@ -146,10 +146,10 @@ static BM_RESULT RunDiskWriteTransaction(
         BM_RESULT rb = OpsGuardRollback(diskNumber, &guard);
         if (rb.status != BM_OK) {
             /* 回滚也失败：把两条信息都带出去 */
-            return BM_Fail(r.status, L"%s失败且回滚失败！请立即用备份恢复: %s",
+            return BM_Fail(r.status, L"%ls失败且回滚失败！请立即用备份恢复: %ls",
                            actionName, (const WCHAR*)guard.autoBackupPath);
         }
-        return BM_Fail(r.status, L"%s失败，已自动回滚。备份: %s",
+        return BM_Fail(r.status, L"%ls失败，已自动回滚。备份: %ls",
                        actionName, (const WCHAR*)guard.autoBackupPath);
     }
     return BM_Ok();
@@ -166,7 +166,7 @@ static BM_RESULT action_install(void* p) {
     INSTALL_CTX* c = (INSTALL_CTX*)p;
     WCHAR err[512] = {0};
     if (MBR_Install(c->diskNumber, c->type, err, 512)) return BM_Ok();
-    return BM_Fail(BM_ERR_EXTERNAL, L"%s", err[0] ? err : L"引导码写入失败");
+    return BM_Fail(BM_ERR_EXTERNAL, L"%ls", err[0] ? err : L"引导码写入失败");
 }
 
 BM_RESULT OpsInstallMbrBootCode(int diskNumber, MBR_BOOT_TYPE type) {
@@ -190,7 +190,7 @@ static BM_RESULT action_restore_mbr(void* p) {
     WCHAR err[512] = {0};
     if (MBR_Restore(c->diskNumber, c->file, c->preservePartTable != FALSE, err, 512))
         return BM_Ok();
-    return BM_Fail(BM_ERR_EXTERNAL, L"%s", err[0] ? err : L"恢复失败");
+    return BM_Fail(BM_ERR_EXTERNAL, L"%ls", err[0] ? err : L"恢复失败");
 }
 
 BM_RESULT OpsRestoreMbrFromFile(int diskNumber, const WCHAR* file, BOOL preservePartTable) {
@@ -215,7 +215,7 @@ static BM_RESULT action_set_active(void* p) {
     WCHAR err[512] = {0};
     if (MBR_SetActivePartition(c->diskNumber, c->partitionNumber, err, 512))
         return BM_Ok();
-    return BM_Fail(BM_ERR_EXTERNAL, L"%s", err[0] ? err : L"设置活动分区失败");
+    return BM_Fail(BM_ERR_EXTERNAL, L"%ls", err[0] ? err : L"设置活动分区失败");
 }
 
 BM_RESULT OpsSetActivePartition(int diskNumber, int partitionNumber) {

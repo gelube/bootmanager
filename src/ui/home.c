@@ -9,6 +9,7 @@
 #include "../../include/envinfo.h"
 #include "../../include/uefi_nvram.h"
 #include "../../include/ops.h"
+#include "../../include/bcdedit.h"
 #include "../../include/esp.h"
 #include "../core/backup.h"
 #include "../core/refind.h"
@@ -98,9 +99,9 @@ static void FillOverview(HWND card) {
     /* BootMgrIsAdmin 在 boot.h 声明 */
     admin = BootMgrIsAdmin() ? TRUE : FALSE;
 
-    swprintf(l1, 128, L"固件模式: %s    权限: %s", uefi ? L"UEFI" : L"Legacy/未知",
+    swprintf(l1, 128, L"固件模式: %ls    权限: %ls", uefi ? L"UEFI" : L"Legacy/未知",
              admin ? L"管理员" : L"普通用户");
-    swprintf(l2, 128, L"系统盘: PhysicalDrive%d    环境: %s",
+    swprintf(l2, 128, L"系统盘: PhysicalDrive%d    环境: %ls",
              sysDisk < 0 ? 0 : sysDisk, EnvIsWinPE() ? L"WinPE" : L"Windows");
     BMCard_SetLine(card, 1, l1);
     BMCard_SetLine(card, 2, l2);
@@ -117,15 +118,22 @@ static void FillDashStatus(HWND hBoot, HWND hLoader, HWND hBackup) {
         BMCard_SetLine(hBoot, 1, L"bcdedit 不可用");
         BMCard_SetLine(hBoot, 2, L"请确认程序目录或 PATH");
     } else {
-        BOOTMGR_BOOT_LIST* list = BootMgrScanBootEntries();
-        int count = list ? list->count : 0;
-        swprintf(l1, 128, L"%d 个启动项", count);
-        BMCard_SetLine(hBoot, 1, l1);
-        if (list && list->entries && BootMgrGetEntryName(list->entries)[0])
-            swprintf(l2, 128, L"首项: %s", BootMgrGetEntryName(list->entries));
-        else
-            swprintf(l2, 128, L"点击查看详情");
-        if (list) BootMgrFreeBootList(list);
+        /* 先探测 bcdedit 真实状态，失败时把原因直接显示出来 */
+        WCHAR probe[8192] = {0};
+        if (!BcdEditExecute(L"/enum firmware", probe, 8192)) {
+            BMCard_SetLine(hBoot, 1, L"bcdedit 调用失败");
+            BMCard_SetLine(hBoot, 2, probe[0] ? probe : L"原因未知");
+        } else {
+            BOOTMGR_BOOT_LIST* list = BootMgrScanBootEntries();
+            int count = list ? list->count : 0;
+            swprintf(l1, 128, L"%d 个启动项", count);
+            BMCard_SetLine(hBoot, 1, l1);
+            if (list && list->entries && BootMgrGetEntryName(list->entries)[0])
+                swprintf(l2, 128, L"首项: %ls", BootMgrGetEntryName(list->entries));
+            else
+                swprintf(l2, 128, L"点击查看详情");
+            if (list) BootMgrFreeBootList(list);
+        }
     }
 
     /* 引导器：检测 MBR 引导码类型 */
@@ -148,7 +156,7 @@ static void FillDashStatus(HWND hBoot, HWND hLoader, HWND hBackup) {
         HANDLE h;
         int count = 0;
         if (BackupGetBackupDir(dir, MAX_PATH)) {
-            swprintf(pattern, MAX_PATH, L"%s\\*.*", dir);
+            swprintf(pattern, MAX_PATH, L"%ls\\*.*", dir);
             h = FindFirstFileW(pattern, &fd);
             if (h != INVALID_HANDLE_VALUE) {
                 do { if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) count++; }
@@ -233,8 +241,8 @@ static void BuildBootMgrPage(void) {
         WCHAR line1[128], line2[160];
         const WCHAR* name = BootMgrGetEntryName(e);
         const WCHAR* path = BootMgrGetEntryPath(e);
-        swprintf(line1, 128, L"%d. %s", i + 1, name && name[0] ? name : L"(未命名)");
-        swprintf(line2, 160, L"%s", path && path[0] ? path : L"-");
+        swprintf(line1, 128, L"%d. %ls", i + 1, name && name[0] ? name : L"(未命名)");
+        swprintf(line2, 160, L"%ls", path && path[0] ? path : L"-");
         g_rowCards[i] = BMCard_Create(g_hHome, 100 + i, MARGIN, y,
                                       CARD_W * 3 + CARD_GAP * 2, 96,
                                       line1, line2, NULL, NULL, FALSE);
@@ -328,25 +336,25 @@ static void BuildLoaderPage(void) {
 
     if (EnsureEspMounted()) {
         WCHAR p[MAX_PATH];
-        swprintf(p, MAX_PATH, L"%s\\EFI\\refind\\refind_x64.efi", g_espDrive);
+        swprintf(p, MAX_PATH, L"%ls\\EFI\\refind\\refind_x64.efi", g_espDrive);
         refindOk = (GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES);
-        swprintf(p, MAX_PATH, L"%s\\EFI\\limine", g_espDrive);
+        swprintf(p, MAX_PATH, L"%ls\\EFI\\limine", g_espDrive);
         limineOk = (GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES);
     }
 
     /* rEFInd 卡 */
-    swprintf(l1, 128, L"状态: %s", refindOk ? L"已安装 ✓" : L"未安装");
-    swprintf(l2, 128, L"ESP: %s", g_espDrive[0] ? g_espDrive : L"未挂载");
+    swprintf(l1, 128, L"状态: %ls", refindOk ? L"已安装 ✓" : L"未安装");
+    swprintf(l2, 128, L"ESP: %ls", g_espDrive[0] ? g_espDrive : L"未挂载");
     g_hCardRefind = BMCard_Create(g_hHome, 800, MARGIN, y, CARD_W, CARD_H + 30,
                                   L"rEFInd", l1, l2,
                                   refindOk ? L"卸载" : L"安装", refindOk ? TRUE : FALSE);
     /* Limine 卡 */
-    swprintf(l1, 128, L"状态: %s", limineOk ? L"已安装 ✓" : L"未安装");
+    swprintf(l1, 128, L"状态: %ls", limineOk ? L"已安装 ✓" : L"未安装");
     g_hCardLimine = BMCard_Create(g_hHome, 801, MARGIN + CARD_W + CARD_GAP, y,
                                   CARD_W, CARD_H + 30, L"Limine", l1, l2,
                                   limineOk ? L"卸载" : L"安装", limineOk ? TRUE : FALSE);
 
-    swprintf(l2, 128, L"说明: 安装/卸载会写入 ESP 分区 %s", g_espDrive[0] ? g_espDrive : L"(未挂载)");
+    swprintf(l2, 128, L"说明: 安装/卸载会写入 ESP 分区 %ls", g_espDrive[0] ? g_espDrive : L"(未挂载)");
     BMCard_Create(g_hHome, 802, MARGIN, y + CARD_H + 42, CARD_W * 2 + CARD_GAP, 90,
                   L"ℹ 操作说明", L"点击卡片右下角按钮执行安装或卸载", l2, NULL, FALSE);
 }
@@ -365,7 +373,7 @@ static void HandleLoaderAction(int cardId, int code) {
             GetModuleFileNameW(NULL, exePath, MAX_PATH);
             slash = wcsrchr(exePath, L'\\');
             if (slash) *slash = 0;
-            swprintf(src, MAX_PATH, L"%s\\refind", exePath);
+            swprintf(src, MAX_PATH, L"%ls\\refind", exePath);
             if (!RefindInstall(src, g_espDrive))
                 MessageBoxW(g_hHome, RefindGetLastErrorMessage(), L"rEFInd 安装失败", MB_OK | MB_ICONERROR);
         } else {
@@ -376,7 +384,7 @@ static void HandleLoaderAction(int cardId, int code) {
     } else {
         /* Limine 状态检测：\EFI\limine 目录 */
         WCHAR p[MAX_PATH];
-        swprintf(p, MAX_PATH, L"%s\\EFI\\limine", g_espDrive);
+        swprintf(p, MAX_PATH, L"%ls\\EFI\\limine", g_espDrive);
         installed = (GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES);
         if (!installed) {
             WCHAR src[MAX_PATH];
@@ -415,7 +423,7 @@ static void BuildBackupPage(void) {
         WIN32_FIND_DATAW fds[64];
         int count = 0, i, j;
 
-        swprintf(pattern, MAX_PATH, L"%s\\*.*", dir);
+        swprintf(pattern, MAX_PATH, L"%ls\\*.*", dir);
         {
             HANDLE h = FindFirstFileW(pattern, &fds[0]);
             if (h != INVALID_HANDLE_VALUE) {
@@ -444,7 +452,7 @@ static void BuildBackupPage(void) {
         } else {
             for (i = 0; i < count && i < 8; i++) {
                 WCHAR line1[128], line2[128];
-                swprintf(line1, 128, L"%s", fds[i].cFileName);
+                swprintf(line1, 128, L"%ls", fds[i].cFileName);
                 swprintf(line2, 128, L"%lu KB", (unsigned long)(fds[i].nFileSizeLow / 1024));
                 BMCard_Create(g_hHome, 820 + i, MARGIN, y, CARD_W * 3 + CARD_GAP * 2, 76,
                               line1, line2, NULL, NULL, FALSE);
@@ -488,12 +496,12 @@ static void HandleBackupAction(WORD btn) {
         WIN32_FIND_DATAW fd;
         HANDLE h;
         WCHAR best[MAX_PATH] = {0};
-        swprintf(pattern, MAX_PATH, L"%s\\*\\mbr.bin", dir);
+        swprintf(pattern, MAX_PATH, L"%ls\\*\\mbr.bin", dir);
         h = FindFirstFileW(pattern, &fd);
         if (h != INVALID_HANDLE_VALUE) {
             do {
                 WCHAR full[MAX_PATH];
-                swprintf(full, MAX_PATH, L"%s\\%s\\mbr.bin", dir, fd.cFileName);
+                swprintf(full, MAX_PATH, L"%ls\\%ls\\mbr.bin", dir, fd.cFileName);
                 if (lstrcmpW(full, best) > 0) lstrcpynW(best, full, MAX_PATH);
             } while (FindNextFileW(h, &fd));
             FindClose(h);
@@ -504,7 +512,7 @@ static void HandleBackupAction(WORD btn) {
         }
         {
             WCHAR msg[MAX_PATH + 64];
-            swprintf(msg, MAX_PATH + 64, L"用以下备份恢复 MBR 引导码？\n\n%s\n\n将保留当前分区表，并自动先做安全备份。", best);
+            swprintf(msg, MAX_PATH + 64, L"用以下备份恢复 MBR 引导码？\n\n%ls\n\n将保留当前分区表，并自动先做安全备份。", best);
             if (MessageBoxW(g_hHome, msg, L"确认恢复", MB_YESNO | MB_ICONWARNING) == IDYES) {
                 int sysDisk = MBR_GetSystemDiskNumber();
                 if (sysDisk < 0) sysDisk = 0;
