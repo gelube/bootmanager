@@ -334,7 +334,7 @@ bool MBR_GetPartitions(int diskNumber, MBR_DISK_INFO* info, WCHAR* error, DWORD 
         // 获取起始 LBA 和大小
         part->startLBA = *(DWORD*)(entry + 8);
         part->totalSectors = *(DWORD*)( entry + 12);
-        part->sizeBytes = part->totalSectors * SECTOR_SIZE;
+        part->sizeBytes = (LONGLONG)part->totalSectors * SECTOR_SIZE;
         
         if (part->isActive) {
             info->activePartition = i + 1;
@@ -687,9 +687,15 @@ bool MBR_Restore(int diskNumber, const WCHAR* inputPath, bool preservePartTable,
         HANDLE hDisk = OpenDisk(diskNumber, GENERIC_READ);
         if (hDisk != INVALID_HANDLE_VALUE) {
             BYTE currentMbr[SECTOR_SIZE];
-            ReadFile(hDisk, currentMbr, SECTOR_SIZE, &bytesRead, NULL);
+            DWORD curRead = 0;
+            BOOL curOk = ReadFile(hDisk, currentMbr, SECTOR_SIZE, &curRead, NULL) && curRead == SECTOR_SIZE;
             CloseHandle(hDisk);
-            
+
+            if (!curOk) {
+                if (error) wcscpy(error, L"读取当前分区表失败，已取消恢复");
+                return false;
+            }
+
             // 保留分区表 (偏移 446-511，共 66 字节)
             memcpy(&mbr[446], &currentMbr[446], 66);
         }
@@ -776,8 +782,13 @@ bool MBR_RestoreBootCode(int diskNumber, const WCHAR* inputPath, WCHAR* error, D
     }
     
     BYTE mbr[SECTOR_SIZE];
-    ReadFile(hDisk, mbr, SECTOR_SIZE, &bytesRead, NULL);
-    
+    DWORD readOk = ReadFile(hDisk, mbr, SECTOR_SIZE, &bytesRead, NULL) && bytesRead == SECTOR_SIZE;
+    if (!readOk) {
+        CloseHandle(hDisk);
+        if (error) wcscpy(error, L"读取当前 MBR 失败，已取消恢复");
+        return false;
+    }
+
     // 仅覆盖引导代码
     memcpy(mbr, bootCode, MBR_BOOT_CODE_SIZE);
     
@@ -893,7 +904,6 @@ bool MBR_BackupPBR(int diskNumber, int partitionNumber, const WCHAR* outputPath,
         }
     }
     
-    MBR_FreeDiskList(&(MBR_DISK_LIST){.disks = info.partitions ? &info : NULL, .count = info.partitions ? 1 : 0});
     if (info.partitions) free(info.partitions);
     
     if (driveLetter == 0) {
@@ -1294,8 +1304,13 @@ bool MBR_InstallGrub4Dos(int diskNumber, const WCHAR* grubSource, WCHAR* error, 
     
     BYTE mbr[SECTOR_SIZE];
     DWORD bytes = 0;
-    ReadFile(hDisk, mbr, SECTOR_SIZE, &bytes, NULL);
-    
+    if (!ReadFile(hDisk, mbr, SECTOR_SIZE, &bytes, NULL) || bytes != SECTOR_SIZE) {
+        CloseHandle(hDisk);
+        free(bootCode);
+        if (error) wcscpy(error, L"读取 MBR 失败");
+        return false;
+    }
+
     DWORD copySize = (bootCodeSize < MBR_BOOT_CODE_SIZE) ? bootCodeSize : MBR_BOOT_CODE_SIZE;
     memcpy(mbr, bootCode, copySize);
     free(bootCode);

@@ -22,7 +22,9 @@ echo.
 
 :: Compile - explicit source files (no wildcard to avoid missing file errors)
 gcc -municode ^
-    src\ui\main.c src\ui\dialog.c ^
+    src\ui\main.c src\ui\dialog.c src\ui\home.c src\ui\cards.c ^
+    src\core\ops.c ^
+    src\utils\bm_result.c src\utils\strconv.c ^
     src\ui\dialogs\add_efi_dialog.c ^
     src\core\boot.c src\core\boot_mode.c src\core\esp.c ^
     src\core\limine.c src\core\mbr_manager.c ^

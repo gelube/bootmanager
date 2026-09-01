@@ -16,6 +16,7 @@
 #include "../../include/esp.h"
 #include "../../include/boot_mode.h"
 #include "../../include/mbr_manager.h"
+#include "home.h"
 
 // 颜色 - 现代浅色主题 (统一风格)
 #define COLOR_BG_MAIN           RGB(240, 253, 250)   // #F0FDFA 浅青背景
@@ -2688,6 +2689,37 @@ static BOOL ResolveLimineSourcePath(WCHAR* path, DWORD size)
 // MBR 管理页面实现
 // ============================================
 
+HWND Classic_CreateAndShow(void)
+{
+    static BOOL s_classRegistered = FALSE;
+    if (!s_classRegistered) {
+        WNDCLASSEXW wc = {0};
+        wc.cbSize = sizeof(wc);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.lpfnWndProc = MainWndProc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.hbrBackground = CreateSolidBrush(COLOR_BG_MAIN);
+        wc.lpszClassName = L"BootManagerProClass";
+        RegisterClassExW(&wc);
+        s_classRegistered = TRUE;
+    }
+    if (!g_hMainWnd) {
+        InitFonts();
+        RegisterFlatButtonClass();
+        RegisterContentClass();
+        g_hMainWnd = CreateWindowExW(0, L"BootManagerProClass", L"Boot Manager Pro v1.0",
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+            CW_USEDEFAULT, CW_USEDEFAULT, WINDOW_WIDTH, WINDOW_HEIGHT, NULL, NULL,
+            GetModuleHandleW(NULL), NULL);
+    }
+    if (g_hMainWnd) {
+        ShowWindow(g_hMainWnd, SW_SHOW);
+        SetForegroundWindow(g_hMainWnd);
+    }
+    return g_hMainWnd;
+}
+
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPWSTR lpCmdLine, int nCmdShow)
 {
     // Per-monitor DPI awareness (Windows 8.1+)
@@ -2698,12 +2730,20 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPWSTR lpCmdLine, int 
             GetProcAddress(hUser32, "SetProcessDpiAwarenessContext");
         if (fn) fn((HANDLE)-4);  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
     }
-    
+
     InitCommonControls();
+
+    /* 新版卡片首页为默认入口；--classic 回到旧版界面 */
+    if (!(lpCmdLine && wcsstr(lpCmdLine, L"--classic"))) {
+        RegisterFlatButtonClass();
+        RegisterContentClass();
+        return HomeMain(hInst, nCmdShow);
+    }
+
     InitFonts();
     RegisterFlatButtonClass();  // 注册扁平按钮类
     RegisterContentClass();  // 注册内容容器窗口类
-    
+
     WNDCLASSEXW wc = {0};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -2713,14 +2753,14 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPWSTR lpCmdLine, int 
     wc.hbrBackground = CreateSolidBrush(COLOR_BG_MAIN);
     wc.lpszClassName = L"BootManagerProClass";
     RegisterClassExW(&wc);
-    
+
     g_hMainWnd = CreateWindowExW(0, L"BootManagerProClass", L"Boot Manager Pro v1.0",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, WINDOW_WIDTH, WINDOW_HEIGHT, NULL, NULL, hInst, NULL);
-    
+
     ShowWindow(g_hMainWnd, nCmdShow);
     UpdateWindow(g_hMainWnd);
-    
+
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
