@@ -596,6 +596,11 @@ static void HandleCardClick(int id, int code) {
 static LRESULT CALLBACK HomeProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE:
+        /* 页面构建延迟到 g_hHome 赋值之后（见 HomeMain），否则子控件父窗口为 NULL */
+        PostMessageW(hWnd, WM_APP + 1, 0, 0);
+        return 0;
+
+    case WM_APP + 1:
         ShowPage(PAGE_DASH);
         return 0;
 
