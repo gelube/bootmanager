@@ -223,6 +223,14 @@ static DWORD ComputeEntryIdFromGuid(const WCHAR* guid) {
 }
 
 // 瑙ｆ瀽鍗曚釜 BCD 鏉＄洰锛屾寜 key/value 瀛楁璇诲彇锛岄€傞厤 firmware 鍜?BOOTAPP 杈撳嚭鏍煎紡銆?
+/* 键名匹配：bcdedit 输出已按 OEM 代码页转为 CHAR，这里转回宽字符后与
+ * 英文/中文键名比较（中文 Windows 输出 "标识符/描述/设备/路径"）。 */
+static BOOL BcdKeyIs(const CHAR* keyA, const WCHAR* want) {
+    WCHAR k[64];
+    if (!OemOutputToWide(keyA, k, 64)) return FALSE;
+    return _wcsicmp(k, want) == 0;
+}
+
 static BOOL ParseBcdEntry(const CHAR* block, BOOTMGR_BOOT_ENTRY* entry, BCD_ENTRY_SOURCE source) {
     CHAR copy[8192];
     CHAR* context = NULL;
@@ -261,13 +269,13 @@ static BOOL ParseBcdEntry(const CHAR* block, BOOTMGR_BOOT_ENTRY* entry, BCD_ENTR
         parsed = sscanf(current, "%63s %959[^\n]", key, value);
         if (parsed >= 2) {
             TrimInPlace(value);
-            if (_stricmp(key, "description") == 0) {
+            if (BcdKeyIs(key, L"description") || BcdKeyIs(key, L"描述")) {
                 strncpy(description, value, sizeof(description) - 1);
-            } else if (_stricmp(key, "identifier") == 0) {
+            } else if (BcdKeyIs(key, L"identifier") || BcdKeyIs(key, L"标识符")) {
                 strncpy(identifier, value, sizeof(identifier) - 1);
-            } else if (_stricmp(key, "device") == 0) {
+            } else if (BcdKeyIs(key, L"device") || BcdKeyIs(key, L"设备")) {
                 strncpy(device, value, sizeof(device) - 1);
-            } else if (_stricmp(key, "path") == 0) {
+            } else if (BcdKeyIs(key, L"path") || BcdKeyIs(key, L"路径")) {
                 strncpy(path, value, sizeof(path) - 1);
             }
         }
@@ -442,6 +450,7 @@ BOOL BootMgrGetBootOrder(DWORD** bootOrder, DWORD* count) {
     }
 
     displayOrder = wcsstr(output, L"displayorder");
+    if (!displayOrder) displayOrder = wcsstr(output, L"启动顺序");  /* 启动顺序 */
     if (!displayOrder) {
         return FALSE;
     }

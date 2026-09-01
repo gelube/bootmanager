@@ -90,6 +90,7 @@ static void FillOverview(HWND card) {
     BOOL uefi = FALSE, admin = FALSE;
     UEFI_BOOT_ORDER bo = {0};
 
+    UefiNvramAcquirePrivilege();   /* 读 NVRAM 需要特权，否则恒判为 Legacy */
     if (UefiNvramGetBootOrder(&bo)) {
         uefi = TRUE;
         UefiNvramFreeBootOrder(&bo);
@@ -97,9 +98,9 @@ static void FillOverview(HWND card) {
     /* BootMgrIsAdmin 在 boot.h 声明 */
     admin = BootMgrIsAdmin() ? TRUE : FALSE;
 
-    swprintf(l1, 128, L"固件: %s · 权限: %s", uefi ? L"UEFI" : L"Legacy/未知",
-             admin ? L"管理员 ✓" : L"普通(部分功能不可用) ⚠");
-    swprintf(l2, 128, L"系统盘: PhysicalDrive%d · 环境: %s",
+    swprintf(l1, 128, L"固件模式: %s    权限: %s", uefi ? L"UEFI" : L"Legacy/未知",
+             admin ? L"管理员" : L"普通用户");
+    swprintf(l2, 128, L"系统盘: PhysicalDrive%d    环境: %s",
              sysDisk < 0 ? 0 : sysDisk, EnvIsWinPE() ? L"WinPE" : L"Windows");
     BMCard_SetLine(card, 1, l1);
     BMCard_SetLine(card, 2, l2);
@@ -171,14 +172,14 @@ static void BuildDashPage(void) {
     HWND hOverview;
 
     g_rowCards[0] = BMCard_Create(g_hHome, CID_BOOTMGR, x, 120, CARD_W, CARD_H,
-        L"🖥 引导管理", L"读取中…", L"", L"进入", FALSE);
+        L"引导管理", L"读取中…", L"", L"进入", FALSE);
     g_rowCards[1] = BMCard_Create(g_hHome, CID_LOADER, x + CARD_W + CARD_GAP, 120,
-        CARD_W, CARD_H, L"📦 引导器安装", L"检测中…", L"", L"进入", FALSE);
+        CARD_W, CARD_H, L"引导器安装", L"检测中…", L"", L"进入", FALSE);
     g_rowCards[2] = BMCard_Create(g_hHome, CID_BACKUP, x + (CARD_W + CARD_GAP) * 2, 120,
-        CARD_W, CARD_H, L"🛟 备份恢复", L"检测中…", L"", L"进入", TRUE);
+        CARD_W, CARD_H, L"备份恢复", L"检测中…", L"", L"进入", TRUE);
 
     hOverview = BMCard_Create(g_hHome, CID_OVERVIEW, MARGIN, 120 + CARD_H + CARD_GAP,
-                              CARD_W * 3 + CARD_GAP * 2, 110, L"系统概览", L"", L"", NULL, FALSE);
+                              CARD_W * 3 + CARD_GAP * 2, 128, L"系统概览", L"", L"", NULL, FALSE);
     SetTimer(g_hHome, 1, 300, NULL);
 
     /* 存句柄给定时器填充用 */
@@ -207,11 +208,11 @@ static void BuildBootMgrPage(void) {
     BOOTMGR_BOOT_ENTRY* e;
 
     BMFlatButton_Create(g_hHome, BTN_REFRESH, HOME_W - MARGIN - 110, 64, 110, 36,
-                        L"🔄 刷新", TRUE, FALSE);
+                        L"刷新", TRUE, FALSE);
 
     if (!BootMgrIsAdmin()) {
         BMCard_Create(g_hHome, 900, MARGIN, y, CARD_W * 3 + CARD_GAP * 2, 110,
-            L"⚠ 需要管理员权限", L"当前以普通权限运行，无法读取启动项。", L"请右键以管理员身份运行程序。", NULL, TRUE);
+            L"需要管理员权限", L"当前以普通权限运行，无法读取启动项。", L"请右键以管理员身份运行程序。", NULL, TRUE);
         return;
     }
 
@@ -243,8 +244,8 @@ static void BuildBootMgrPage(void) {
 
     /* 操作栏 */
     y += 8;
-    BMFlatButton_Create(g_hHome, BTN_UP,          MARGIN, y, 96, 36, L"↑ 上移", FALSE, FALSE);
-    BMFlatButton_Create(g_hHome, BTN_DOWN,        MARGIN + 106, y, 96, 36, L"↓ 下移", FALSE, FALSE);
+    BMFlatButton_Create(g_hHome, BTN_UP,          MARGIN, y, 96, 36, L"上移", FALSE, FALSE);
+    BMFlatButton_Create(g_hHome, BTN_DOWN,        MARGIN + 106, y, 96, 36, L"下移", FALSE, FALSE);
     BMFlatButton_Create(g_hHome, BTN_SETDEFAULT,  MARGIN + 212, y, 120, 36, L"设为默认", FALSE, FALSE);
     BMFlatButton_Create(g_hHome, BTN_DELETE,      MARGIN + 342, y, 96, 36, L"删除", FALSE, TRUE);
     (void)title;
@@ -323,7 +324,7 @@ static void BuildLoaderPage(void) {
     int y = 120;
 
     BMFlatButton_Create(g_hHome, BTN_REFRESH, HOME_W - MARGIN - 110, 64, 110, 36,
-                        L"🔄 刷新", TRUE, FALSE);
+                        L"刷新", TRUE, FALSE);
 
     if (EnsureEspMounted()) {
         WCHAR p[MAX_PATH];
@@ -402,11 +403,11 @@ static void BuildBackupPage(void) {
     WCHAR dir[MAX_PATH];
 
     BMFlatButton_Create(g_hHome, BTN_BACKUPNOW, HOME_W - MARGIN - 140, 64, 140, 36,
-                        L"💾 立即全量备份", TRUE, FALSE);
+                        L"立即全量备份", TRUE, FALSE);
     BMFlatButton_Create(g_hHome, BTN_RESTOREMBR, HOME_W - MARGIN - 290, 64, 140, 36,
-                        L"↩ 恢复最近MBR", FALSE, TRUE);
+                        L"恢复最近MBR", FALSE, TRUE);
     BMFlatButton_Create(g_hHome, BTN_OPENDIR, HOME_W - MARGIN - 440, 64, 140, 36,
-                        L"📂 备份目录", FALSE, FALSE);
+                        L"备份目录", FALSE, FALSE);
 
     if (BackupGetBackupDir(dir, MAX_PATH)) {
         /* 列出最近的备份文件（简单排序：按名称倒序=时间倒序） */
@@ -550,9 +551,9 @@ static void ShowPage(int page) {
                 CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
         HWND hLabel = CreateWindowExW(0, L"STATIC",
             page == PAGE_DASH ? L"Boot Manager Pro"
-            : page == PAGE_BOOTMGR ? L"🖥 引导管理"
-            : page == PAGE_LOADER ? L"📦 引导器安装"
-            : L"🛟 备份恢复",
+            : page == PAGE_BOOTMGR ? L"引导管理"
+            : page == PAGE_LOADER ? L"引导器安装"
+            : L"备份恢复",
             WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, MARGIN, 28, 500, 32,
             g_hHome, NULL, NULL, NULL);
             SendMessageW(hLabel, WM_SETFONT, (WPARAM)hTitle, TRUE);
