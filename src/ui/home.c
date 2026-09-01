@@ -12,6 +12,7 @@
 #include "../../include/esp.h"
 #include "../core/backup.h"
 #include "../core/refind.h"
+#include "../include/limine.h"
 #include "../include/mbr_manager.h"
 #include <windows.h>
 #include <windowsx.h>
@@ -169,11 +170,11 @@ static void BuildDashPage(void) {
     int x = MARGIN;
     HWND hOverview;
 
-    g_hRowCards[0] = BMCard_Create(g_hHome, CID_BOOTMGR, x, 120, CARD_W, CARD_H,
+    g_rowCards[0] = BMCard_Create(g_hHome, CID_BOOTMGR, x, 120, CARD_W, CARD_H,
         L"🖥 引导管理", L"读取中…", L"", L"进入", FALSE);
-    g_hRowCards[1] = BMCard_Create(g_hHome, CID_LOADER, x + CARD_W + CARD_GAP, 120,
+    g_rowCards[1] = BMCard_Create(g_hHome, CID_LOADER, x + CARD_W + CARD_GAP, 120,
         CARD_W, CARD_H, L"📦 引导器安装", L"检测中…", L"", L"进入", FALSE);
-    g_hRowCards[2] = BMCard_Create(g_hHome, CID_BACKUP, x + (CARD_W + CARD_GAP) * 2, 120,
+    g_rowCards[2] = BMCard_Create(g_hHome, CID_BACKUP, x + (CARD_W + CARD_GAP) * 2, 120,
         CARD_W, CARD_H, L"🛟 备份恢复", L"检测中…", L"", L"进入", TRUE);
 
     hOverview = BMCard_Create(g_hHome, CID_OVERVIEW, MARGIN, 120 + CARD_H + CARD_GAP,
@@ -235,7 +236,7 @@ static void BuildBootMgrPage(void) {
         swprintf(line2, 160, L"%s", path && path[0] ? path : L"-");
         g_rowCards[i] = BMCard_Create(g_hHome, 100 + i, MARGIN, y,
                                       CARD_W * 3 + CARD_GAP * 2, 96,
-                                      line1, line2, NULL, FALSE);
+                                      line1, line2, NULL, NULL, FALSE);
         y += 96 + 12;
         g_rowCount++;
     }
@@ -445,14 +446,14 @@ static void BuildBackupPage(void) {
                 swprintf(line1, 128, L"%s", fds[i].cFileName);
                 swprintf(line2, 128, L"%lu KB", (unsigned long)(fds[i].nFileSizeLow / 1024));
                 BMCard_Create(g_hHome, 820 + i, MARGIN, y, CARD_W * 3 + CARD_GAP * 2, 76,
-                              line1, line2, NULL, FALSE);
+                              line1, line2, NULL, NULL, FALSE);
                 y += 76 + 10;
             }
             if (count > 8) {
                 WCHAR l1[64];
                 swprintf(l1, 64, L"… 共 %d 个文件，其余请在备份目录查看", count);
                 BMCard_Create(g_hHome, 830, MARGIN, y, CARD_W * 3 + CARD_GAP * 2, 60,
-                              l1, L"", NULL, FALSE);
+                              l1, L"", NULL, NULL, FALSE);
             }
         }
     }
