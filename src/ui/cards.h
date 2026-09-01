@@ -28,3 +28,12 @@ void BMCard_SetLine(HWND card, int idx, const WCHAR* text);
 #ifdef __cplusplus
 }
 #endif
+
+/* 选中态（引导项列表等场景），selected 时边框加粗为主色 */
+void BMCard_SetSelected(HWND card, BOOL selected);
+BOOL BMCard_IsSelected(HWND card);
+
+/* 扁平按钮：primary=主色实心，否则白底细边。点击发 WM_COMMAND (id, 0) */
+BOOL BMFlatButton_RegisterClass(HINSTANCE hInst);
+HWND BMFlatButton_Create(HWND parent, int id, int x, int y, int w, int h,
+                         const WCHAR* text, BOOL primary, BOOL danger);

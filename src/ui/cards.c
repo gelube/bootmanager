@@ -30,6 +30,7 @@ typedef struct _CARD_DATA {
     WCHAR line2[128];
     WCHAR btn[32];
     BOOL  danger;
+    BOOL  selected;
     BOOL  hover;
     BOOL  btnHover;
     BOOL  tracking;
@@ -73,10 +74,10 @@ static void PaintCard(HWND hWnd, HDC hdc) {
         HBRUSH bg = CreateSolidBrush(CARD_BG);
         HBRUSH oldBg = SelectObject(hdc, bg);
         HPEN pen, oldPen;
-        COLORREF border = d->hover
-            ? (d->danger ? CARD_DANGER_HV : CARD_BORDER_HV)
-            : CARD_BORDER;
-        pen = CreatePen(PS_SOLID, d->hover ? 2 : 1, border);
+        COLORREF border = d->selected ? ACCENT
+            : (d->hover ? (d->danger ? CARD_DANGER_HV : CARD_BORDER_HV)
+                        : CARD_BORDER);
+        pen = CreatePen(PS_SOLID, (d->hover || d->selected) ? 2 : 1, border);
         oldPen = SelectObject(hdc, pen);
         RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, CARD_RADIUS, CARD_RADIUS);
         SelectObject(hdc, oldPen);
@@ -236,4 +237,125 @@ void BMCard_SetLine(HWND card, int idx, const WCHAR* text) {
     if (idx == 1) lstrcpynW(d->line1, text, 128);
     else if (idx == 2) lstrcpynW(d->line2, text, 128);
     InvalidateRect(card, NULL, FALSE);
+}
+
+BOOL BMCard_IsSelected(HWND card) {
+    CARD_DATA* d = (CARD_DATA*)GetWindowLongPtrW(card, GWLP_USERDATA);
+    return d ? d->selected : FALSE;
+}
+
+void BMCard_SetSelected(HWND card, BOOL selected) {
+    CARD_DATA* d = (CARD_DATA*)GetWindowLongPtrW(card, GWLP_USERDATA);
+    if (!d) return;
+    d->selected = selected;
+    InvalidateRect(card, NULL, FALSE);
+}
+
+/* ---------------- 扁平按钮 ---------------- */
+
+typedef struct _FLATBTN_DATA {
+    int  id;
+    BOOL primary;
+    BOOL danger;
+    BOOL hover;
+    WCHAR text[48];
+    BOOL tracking;
+} FLATBTN_DATA;
+
+static LRESULT CALLBACK FlatBtnProc2(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    FLATBTN_DATA* d = (FLATBTN_DATA*)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+
+    switch (msg) {
+    case WM_CREATE: {
+        CREATESTRUCTW* cs = (CREATESTRUCTW*)lParam;
+        d = (FLATBTN_DATA*)calloc(1, sizeof(FLATBTN_DATA));
+        if (!d) return -1;
+        d->id = (int)(INT_PTR)cs->lpCreateParams;
+        SetWindowLongPtrW(hWnd, GWLP_USERDATA, (LONG_PTR)d);
+        EnsureFonts();
+        return 0;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        SetBkMode(hdc, TRANSPARENT);
+        {
+            COLORREF fill = d->primary
+                ? (d->hover ? ACCENT_HOVER : ACCENT)
+                : (d->danger ? (d->hover ? DANGER_HOVER : DANGER) : CARD_BG);
+            COLORREF border = d->danger && !d->primary ? DANGER : (d->primary ? fill : CARD_BORDER);
+            COLORREF text = (d->primary || d->danger) ? RGB(255,255,255) : TEXT_PRIMARY;
+            HBRUSH bg = CreateSolidBrush(fill);
+            HPEN pen = CreatePen(PS_SOLID, 1, border);
+            HBRUSH oldBg = SelectObject(hdc, bg);
+            HPEN oldPen = SelectObject(hdc, pen);
+            RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
+            SelectObject(hdc, oldPen);
+            SelectObject(hdc, oldBg);
+            DeleteObject(pen);
+            DeleteObject(bg);
+            SelectObject(hdc, g_fontBtn);
+            SetTextColor(hdc, text);
+            DrawTextW(hdc, d->text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_MOUSEMOVE: {
+        if (!d->tracking) {
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hWnd, 0 };
+            TrackMouseEvent(&tme);
+            d->tracking = TRUE;
+        }
+        if (!d->hover) {
+            d->hover = TRUE;
+            SetCursor(LoadCursor(NULL, IDC_HAND));
+            InvalidateRect(hWnd, NULL, FALSE);
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        d->tracking = FALSE;
+        d->hover = FALSE;
+        InvalidateRect(hWnd, NULL, FALSE);
+        return 0;
+    case WM_LBUTTONUP:
+        PostMessageW(GetParent(hWnd), WM_COMMAND, MAKEWPARAM(d->id, 0), (LPARAM)hWnd);
+        return 0;
+    case WM_DESTROY:
+        free(d);
+        SetWindowLongPtrW(hWnd, GWLP_USERDATA, 0);
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+HWND BMFlatButton_Create(HWND parent, int id, int x, int y, int w, int h,
+                         const WCHAR* text, BOOL primary, BOOL danger) {
+    HWND hWnd = CreateWindowExW(0, L"BMFlatBtnClass", NULL,
+        WS_CHILD | WS_VISIBLE, x, y, w, h, parent,
+        (HMENU)(INT_PTR)(2000 + id), NULL, (LPVOID)(INT_PTR)id);
+    if (!hWnd) return NULL;
+    {
+        FLATBTN_DATA* d = (FLATBTN_DATA*)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+        lstrcpynW(d->text, text ? text : L"", 48);
+        d->primary = primary;
+        d->danger = danger;
+    }
+    return hWnd;
+}
+
+BOOL BMFlatButton_RegisterClass(HINSTANCE hInst) {
+    WNDCLASSEXW wc = {0};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = FlatBtnProc2;
+    wc.hInstance = hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = L"BMFlatBtnClass";
+    return RegisterClassExW(&wc) != 0;
 }
