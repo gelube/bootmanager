@@ -1,4 +1,6 @@
 #include "backup.h"
+#include "../../include/envinfo.h"
+#include "../../include/mbr_manager.h"
 #include <wchar.h>
 #include <time.h>
 
@@ -279,7 +281,11 @@ BOOL BackupAll(const WCHAR* backupDir, BACKUP_TYPE types) {
     // Backup MBR
     if (types & BACKUP_MBR) {
         swprintf(path, MAX_PATH, L"%s\\Backup_%s\\mbr.bin", backupDir, timestamp);
-        if (!BackupMBR(L"PhysicalDrive0", path)) {
+        WCHAR drive[40];
+        int sysDisk = MBR_GetSystemDiskNumber();
+        if (sysDisk < 0) sysDisk = 0;
+        swprintf(drive, 40, L"PhysicalDrive%d", sysDisk);
+        if (!BackupMBR(drive, path)) {
             result = FALSE;
         }
     }
@@ -313,7 +319,11 @@ BOOL RestoreAll(const WCHAR* backupDir, BACKUP_TYPE types) {
     if (types & BACKUP_MBR) {
         swprintf(path, MAX_PATH, L"%s\\mbr.bin", backupDir);
         if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
-            result = RestoreMBR(L"PhysicalDrive0", path) && result;
+            WCHAR drive[40];
+            int sysDisk = MBR_GetSystemDiskNumber();
+            if (sysDisk < 0) sysDisk = 0;
+            swprintf(drive, 40, L"PhysicalDrive%d", sysDisk);
+            result = RestoreMBR(drive, path) && result;
         } else {
             result = FALSE;
         }
@@ -389,6 +399,11 @@ BOOL RepairBCDBoot(const WCHAR* windowsDir, const WCHAR* targetDrive) {
     if (!windowsDir || !targetDrive) return FALSE;
     
     swprintf(cmd, 1024, L"/c bcdboot \"%s\" /s %s /f UEFI", windowsDir, targetDrive);
+
+    if (EnvIsWinPE()) {
+        /* PE 下无 UAC/Shell，直接 CreateProcess */
+        return RunElevatedCommand(cmd);
+    }
     
     SHELLEXECUTEINFOW sei = {0};
     sei.cbSize = sizeof(sei);
@@ -411,6 +426,9 @@ BOOL RepairBCDBoot(const WCHAR* windowsDir, const WCHAR* targetDrive) {
 
 // Rebuild BCD
 BOOL RepairRebuildBCD(void) {
+    if (EnvIsWinPE()) {
+        return RunElevatedCommand(L"/c bootrec /rebuildbcd");
+    }
     SHELLEXECUTEINFOW sei = {0};
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;

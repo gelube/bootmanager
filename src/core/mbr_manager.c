@@ -172,24 +172,48 @@ static HANDLE OpenVolume(WCHAR driveLetter, DWORD access) {
     return hVol;
 }
 
+/* PE 兜底：X: 内存盘没有物理磁盘映射，此时按"有活动分区的 MBR 盘"推断系统盘 */
+static int FallbackSystemDiskByBootFlag(void) {
+    for (int i = 0; i < 16; i++) {
+        HANDLE hDisk = OpenDisk(i, GENERIC_READ);
+        if (hDisk == INVALID_HANDLE_VALUE) continue;
+
+        BYTE mbr[SECTOR_SIZE];
+        DWORD bytesRead = 0;
+        BOOL ok = ReadFile(hDisk, mbr, SECTOR_SIZE, &bytesRead, NULL) && bytesRead == SECTOR_SIZE;
+        CloseHandle(hDisk);
+        if (!ok) continue;
+        if (mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA) continue;
+
+        for (int p = 0; p < 4; p++) {
+            BYTE* entry = &mbr[0x1BE + p * 16];
+            if (entry[0] == 0x80 && entry[4] != 0) return i;   /* 活动分区所在盘 */
+        }
+    }
+    return -1;
+}
+
 int MBR_GetSystemDiskNumber(void) {
     WCHAR systemDir[MAX_PATH];
     GetWindowsDirectoryW(systemDir, MAX_PATH);
-    
+
     HANDLE hVol = OpenVolume(systemDir[0], GENERIC_READ);
-    if (hVol == INVALID_HANDLE_VALUE) return -1;
-    
-    VOLUME_DISK_EXTENTS extents = {0};
-    DWORD bytesReturned;
-    int diskNumber = -1;
-    
-    if (DeviceIoControl(hVol, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-        NULL, 0, &extents, sizeof(extents), &bytesReturned, NULL)) {
-        diskNumber = (int)extents.Extents[0].DiskNumber;
+    if (hVol != INVALID_HANDLE_VALUE) {
+        VOLUME_DISK_EXTENTS extents = {0};
+        DWORD bytesReturned;
+        int diskNumber = -1;
+
+        if (DeviceIoControl(hVol, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            NULL, 0, &extents, sizeof(extents), &bytesReturned, NULL)
+            && extents.NumberOfDiskExtents > 0) {
+            diskNumber = (int)extents.Extents[0].DiskNumber;
+        }
+        CloseHandle(hVol);
+        if (diskNumber >= 0) return diskNumber;
     }
-    
-    CloseHandle(hVol);
-    return diskNumber;
+
+    /* 正常 Windows 打开卷失败极少见；走到这里大概率是 PE（Windows 目录在内存盘上） */
+    return FallbackSystemDiskByBootFlag();
 }
 
 // ============================================

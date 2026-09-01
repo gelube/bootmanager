@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#include "../../include/strconv.h"
 
 /**
  * Sanitize a wide string for safe inclusion in bcdedit command arguments.
@@ -57,7 +58,7 @@ static BOOL ExtractGuid(const CHAR* text, WCHAR* guid, DWORD guidSize) {
     memcpy(guidA, start, (size_t)(end - start + 1));
     guidA[end - start + 1] = '\0';
 
-    return MultiByteToWideChar(CP_ACP, 0, guidA, -1, guid, (int)guidSize) > 0;
+    return MultiByteToWideChar(CP_OEMCP, 0, guidA, -1, guid, (int)guidSize) > 0;
 }
 
 BOOL BcdEditExecute(const WCHAR* command, WCHAR* output, DWORD outputSize) {
@@ -149,7 +150,7 @@ BOOL BcdEditExecute(const WCHAR* command, WCHAR* output, DWORD outputSize) {
     CloseHandle(pi.hThread);
 
     if (output && outputSize > 0) {
-        if (MultiByteToWideChar(CP_ACP, 0, outA, -1, output, (int)outputSize) == 0) {
+        if (!OemOutputToWide(outA, output, outputSize)) {
             output[0] = L'\0';
         }
     }

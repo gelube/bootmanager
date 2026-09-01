@@ -4,6 +4,102 @@
 
 #include "../../include/esp.h"
 #include <wchar.h>
+#include <winioctl.h>
+#include <stdio.h>
+
+/* GPT EFI System Partition GUID: c12a7328-f81f-11d2-ba4b-00a0c93ec93b */
+static GUID kEspGuid = {0xc12a7328, 0xf81f, 0x11d2,
+    {0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b}};
+
+/*
+ * 纯 API 的 ESP 挂载兜底（PE 下 mountvol /S 经常不可用）：
+ * 1) 枚举磁盘 GPT 布局，找到 ESP 所在的 (磁盘, 起始偏移)
+ * 2) 枚举所有卷（含无盘符卷），按 磁盘+偏移 匹配出 ESP 卷
+ * 3) 用 DefineDosDevice 分配空闲盘符
+ */
+static BOOL MountEspViaPartition(WCHAR* driveLetter, DWORD size) {
+    for (int d = 0; d < 16; d++) {
+        WCHAR diskPath[MAX_PATH];
+        HANDLE hDisk;
+        BYTE layout[16 * 1024];
+        DWORD bytes = 0;
+        DWORD partCount, i;
+        DRIVE_LAYOUT_INFORMATION_EX* dl;
+
+        swprintf(diskPath, MAX_PATH, L"\\\\.\\PhysicalDrive%d", d);
+        hDisk = CreateFileW(diskPath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            NULL, OPEN_EXISTING, 0, NULL);
+        if (hDisk == INVALID_HANDLE_VALUE) continue;
+
+        if (!DeviceIoControl(hDisk, IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
+                             NULL, 0, layout, sizeof(layout), &bytes, NULL)) {
+            CloseHandle(hDisk);
+            continue;
+        }
+        CloseHandle(hDisk);
+
+        dl = (DRIVE_LAYOUT_INFORMATION_EX*)layout;
+        if (dl->PartitionStyle != PARTITION_STYLE_GPT) continue;
+        partCount = dl->PartitionCount;
+
+        for (i = 0; i < partCount; i++) {
+            PARTITION_INFORMATION_EX* pi = &dl->PartitionEntry[i];
+            WCHAR volName[MAX_PATH];
+            HANDLE hFind;
+
+            if (pi->PartitionStyle != PARTITION_STYLE_GPT) continue;
+            if (memcmp(&pi->Gpt.PartitionType, &kEspGuid, sizeof(GUID)) != 0) continue;
+
+            /* 找到 ESP：枚举卷，按 磁盘号+起始偏移 匹配 */
+            hFind = FindFirstVolumeW(volName, MAX_PATH);
+            if (hFind == INVALID_HANDLE_VALUE) continue;
+
+            do {
+                HANDLE hVol = CreateFileW(volName, GENERIC_READ,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                          NULL, OPEN_EXISTING, 0, NULL);
+                VOLUME_DISK_EXTENTS ext = {0};
+                DWORD ret = 0;
+
+                if (hVol == INVALID_HANDLE_VALUE) continue;
+                if (!DeviceIoControl(hVol, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+                                     NULL, 0, &ext, sizeof(ext), &ret, NULL) ||
+                    ext.NumberOfDiskExtents <= 0 ||
+                    ext.Extents[0].DiskNumber != (DWORD)d ||
+                    ext.Extents[0].StartingOffset.QuadPart != pi->StartingOffset.QuadPart) {
+                    CloseHandle(hVol);
+                    continue;
+                }
+                CloseHandle(hVol);
+                FindClose(hFind);
+
+                /* 分配空闲盘符：raw DefineDosDevice 指向 \\?\Volume{guid} */
+                for (WCHAR c = L'Z'; c >= L'C'; --c) {
+                    WCHAR root[4] = {c, L':', L'\\', 0};
+                    WCHAR dosDev[3] = {c, L':', 0};
+                    WCHAR devName[MAX_PATH];
+                    size_t len;
+
+                    if (GetDriveTypeW(root) != DRIVE_NO_ROOT_DIR) continue;
+                    lstrcpynW(devName, volName, MAX_PATH);
+                    len = wcslen(devName);
+                    if (len > 0 && devName[len - 1] == L'\\') devName[len - 1] = 0;
+
+                    if (DefineDosDeviceW(DDD_RAW_TARGET_PATH, dosDev, devName)) {
+                        Sleep(300);
+                        if (GetFileAttributesW(root) != INVALID_FILE_ATTRIBUTES) {
+                            swprintf(driveLetter, size, L"%c:", c);
+                            return TRUE;
+                        }
+                    }
+                }
+                return FALSE;
+            } while (FindNextVolumeW(hFind, volName, MAX_PATH));
+            FindClose(hFind);
+        }
+    }
+    return FALSE;
+}
 
 // 追踪我们挂载的 ESP 盘符（最多一个）
 static WCHAR s_mountedByUs = 0;
@@ -120,6 +216,13 @@ BOOL EspMountEx(WCHAR* driveLetter, DWORD size, BOOL* mountedByUs) {
     if (GetFileAttributesW(root) != INVALID_FILE_ATTRIBUTES) {
         swprintf(driveLetter, size, L"%c:", letter);
         s_mountedByUs = letter;
+        if (mountedByUs) *mountedByUs = TRUE;
+        return TRUE;
+    }
+
+    /* mountvol 失败兜底：纯 API 挂载（PE 下 mountvol /S 常不可用） */
+    if (MountEspViaPartition(driveLetter, size)) {
+        s_mountedByUs = driveLetter[0];
         if (mountedByUs) *mountedByUs = TRUE;
         return TRUE;
     }

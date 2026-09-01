@@ -7,6 +7,7 @@
 #include "../../include/bcdedit.h"
 #include "../../include/uefi_nvram.h"
 #include <wchar.h>
+#include "../../include/strconv.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -63,7 +64,7 @@ static BOOL ExecuteCommand(const WCHAR* cmd, CHAR* output, DWORD outputSize) {
         WCHAR wideOutput[8192] = {0};
         BOOL ok = BcdEditExecute(cmd + 8, wideOutput, 8192);
         if (output && outputSize > 0) {
-            if (WideCharToMultiByte(CP_ACP, 0, wideOutput, -1, output, (int)outputSize, NULL, NULL) == 0) {
+            if (WideCharToMultiByte(CP_OEMCP, 0, wideOutput, -1, output, (int)outputSize, NULL, NULL) == 0) {
                 output[0] = '\0';
             }
         }
@@ -202,7 +203,7 @@ static BOOL ExtractGuidFromOutput(const CHAR* output, WCHAR* guid, DWORD guidSiz
     memcpy(guidA, guidStart, (size_t)(guidEnd - guidStart + 1));
     guidA[guidEnd - guidStart + 1] = '\0';
 
-    converted = MultiByteToWideChar(CP_ACP, 0, guidA, -1, guid, (int)guidSize);
+    converted = MultiByteToWideChar(CP_OEMCP, 0, guidA, -1, guid, (int)guidSize);
     return (converted > 0);
 }
 
@@ -282,10 +283,10 @@ static BOOL ParseBcdEntry(const CHAR* block, BOOTMGR_BOOT_ENTRY* entry, BCD_ENTR
         strncpy(description, identifier, sizeof(description) - 1);
     }
 
-    MultiByteToWideChar(CP_ACP, 0, description, -1, entry->name, 256);
-    MultiByteToWideChar(CP_ACP, 0, device, -1, entry->devicePath, 512);
-    MultiByteToWideChar(CP_ACP, 0, path, -1, entry->filePath, 512);
-    MultiByteToWideChar(CP_ACP, 0, identifier, -1, entry->guid, 64);
+    MultiByteToWideChar(CP_OEMCP, 0, description, -1, entry->name, 256);
+    MultiByteToWideChar(CP_OEMCP, 0, device, -1, entry->devicePath, 512);
+    MultiByteToWideChar(CP_OEMCP, 0, path, -1, entry->filePath, 512);
+    MultiByteToWideChar(CP_OEMCP, 0, identifier, -1, entry->guid, 64);
 
     entry->id = ComputeEntryIdFromGuid(entry->guid);
     entry->active = TRUE;
@@ -539,10 +540,15 @@ BOOL BootMgrAddBootEntry(const WCHAR* name, const WCHAR* devicePath, const WCHAR
 
     // Find a free BootXXXX slot
     UINT16 bootNum = 0;
+    BOOL foundSlot = FALSE;
     for (UINT32 n = 0; n <= 0xFFFF; n++) {
         UEFI_BOOT_ENTRY* existing = UefiNvramGetBootEntry((UINT16)n);
-        if (!existing) { bootNum = (UINT16)n; break; }
+        if (!existing) { bootNum = (UINT16)n; foundSlot = TRUE; break; }
         UefiNvramFreeEntry(existing);
+    }
+    if (!foundSlot) {
+        /* NVRAM 已满：不能落到 0 号槽覆盖已有 Boot0000 */
+        return FALSE;
     }
 
     DWORD blobSize = 0;
@@ -616,14 +622,11 @@ BOOL BootMgrDeleteBootEntry(DWORD id) {
     WCHAR guid[64] = {0};
     BOOL found = FindEntryGuidById(list, id, guid, 64);
     BootMgrFreeBootList(list);
-    
+
     if (!found) {
-        // If GUID not found, try bcdedit /delete {bootXXXX} format
-        // Note: bcdedit identifiers are GUIDs like {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
-        // The bootXXXX format is the NVRAM variable name, NOT a valid BCD identifier.
-        // Without a real GUID, bcdedit /delete will fail.
-        // The NVRAM path (UefiDeleteBootEntry) handles this correctly.
-        swprintf(guid, 64, L"{%08X-xxxx-xxxx-xxxx-xxxxxxxxxxxx}", id);
+        /* 找不到真实 GUID 时不能伪造（bcdedit 必然失败，且用户会以为删除成功），
+           直接返回失败。bootXXXX 形式的 NVRAM 删除由 UefiDeleteBootEntry 路径负责。 */
+        return FALSE;
     }
     
     // 鎵ц bcdedit /delete {guid}
@@ -683,11 +686,11 @@ BOOL BootMgrSetDefaultBootEntry(BOOTMGR_BOOT_LIST* list, DWORD id) {
     if (id == 0) return FALSE;
     
     WCHAR guid[64] = {0};
-    
+
     // If list provided, find GUID from it
     if (list) {
         if (!FindEntryGuidById(list, id, guid, 64)) {
-            swprintf(guid, 64, L"{%08X-xxxx-xxxx-xxxx-xxxxxxxxxxxx}", id);
+            return FALSE;   /* 找不到真实 GUID，拒绝伪造后静默失败 */
         }
     } else {
         // No list, scan to get GUID
@@ -697,7 +700,7 @@ BOOL BootMgrSetDefaultBootEntry(BOOTMGR_BOOT_LIST* list, DWORD id) {
             BootMgrFreeBootList(scanList);
         }
         if (wcslen(guid) == 0) {
-            swprintf(guid, 64, L"{%08X-xxxx-xxxx-xxxx-xxxxxxxxxxxx}", id);
+            return FALSE;
         }
     }
     
