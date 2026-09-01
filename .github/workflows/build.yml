@@ -22,6 +22,7 @@ jobs:
       - name: Compile
         shell: msys2 {0}
         run: |
+          mkdir -p dist
           gcc -municode \
             src/ui/main.c src/ui/dialog.c src/ui/home.c src/ui/cards.c \
             src/core/ops.c \
